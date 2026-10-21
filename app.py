@@ -1049,11 +1049,12 @@ def run_job(job):
             job["sub"] = str(sub_path)
 
         set_state(job, "done", "完成", 100)
-        for p in {video, Path(job.get("run_path") or video)}:
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        if not params.get("keepVideo"):
+            for p in {video, Path(job.get("run_path") or video)}:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         add_log(job, "ERROR: " + msg)
@@ -1142,6 +1143,8 @@ def new_job(name):
         "reviewReport": None, "reviewError": None, "detectedLang": None,
         "publish": None, "publishState": "idle", "publishMessage": "", "publishError": None,
         "publishProgress": 0, "publishInstruction": "",
+        "aiEditState": "idle", "aiEditProgress": 0, "aiEditMessage": "",
+        "aiEditPlan": None, "aiEditOutput": None, "aiEditError": None,
         "dir": d, "created": time.time(), "started": None, "proc": None,
         "params": None, "exe": None, "duration": 0.0,
     }
@@ -1177,6 +1180,12 @@ def job_public(job):
         "publishError": job.get("publishError"),
         "publishProgress": job.get("publishProgress", 0),
         "publishInstruction": job.get("publishInstruction", ""),
+        "aiEditState": job.get("aiEditState", "idle"),
+        "aiEditProgress": job.get("aiEditProgress", 0),
+        "aiEditMessage": job.get("aiEditMessage", ""),
+        "aiEditPlan": job.get("aiEditPlan"),
+        "aiEditReady": bool(job.get("aiEditOutput") and Path(job["aiEditOutput"]).exists()),
+        "aiEditError": job.get("aiEditError"),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
     }
 
@@ -1198,6 +1207,12 @@ def _job_to_record(job):
         "publishMessage": job.get("publishMessage", ""), "publishError": job.get("publishError"),
         "publishProgress": job.get("publishProgress", 0),
         "publishInstruction": job.get("publishInstruction", ""),
+        "aiEditState": job.get("aiEditState", "idle"),
+        "aiEditProgress": job.get("aiEditProgress", 0),
+        "aiEditMessage": job.get("aiEditMessage", ""),
+        "aiEditPlan": job.get("aiEditPlan"),
+        "aiEditOutput": job.get("aiEditOutput"),
+        "aiEditError": job.get("aiEditError"),
         "dir": str(job["dir"]),
     }
 
@@ -1304,6 +1319,12 @@ def load_history():
             "publishMessage": publish_msg, "publishError": publish_err,
             "publishProgress": r.get("publishProgress", 0),
             "publishInstruction": r.get("publishInstruction", ""),
+            "aiEditState": r.get("aiEditState", "idle"),
+            "aiEditProgress": r.get("aiEditProgress", 0),
+            "aiEditMessage": r.get("aiEditMessage", ""),
+            "aiEditPlan": r.get("aiEditPlan"),
+            "aiEditOutput": r.get("aiEditOutput"),
+            "aiEditError": r.get("aiEditError"),
             "detectedLang": r.get("detectedLang"),
             "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
             "created": r.get("created") or time.time(), "started": r.get("started"),
@@ -1665,10 +1686,10 @@ def build_remux_cmd(src, dst):
             "-avoid_negative_ts", "make_zero", str(dst)]
 
 
-def run_ffmpeg_progress(job, cmd, duration, label="编码中"):
+def run_ffmpeg_progress(job, cmd, duration, label="编码中", cwd=None):
     add_video_log(job, "$ " + " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True, bufsize=1, creationflags=CREATE_NO_WINDOW)
+                            text=True, bufsize=1, creationflags=CREATE_NO_WINDOW, cwd=cwd)
     job["proc"] = proc
     for line in proc.stderr:
         m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
@@ -1842,6 +1863,185 @@ def load_video_history():
         }
 
 
+# ---------------------------------------------------------------- AI 剪辑
+def srt_time_to_seconds(t):
+    t = t.strip().replace(",", ".")
+    h, m, s = t.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def seconds_to_srt(t):
+    t = max(0.0, t)
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}".replace(".", ",")
+
+
+def ai_plan_clips(job, instruction, max_clips, clip_length):
+    path = job.get("sub") or job.get("raw")
+    if not path:
+        raise RuntimeError("还没有字幕，请先转录")
+    cues = parse_srt(read_text(Path(path)))
+    if not cues:
+        raise RuntimeError("字幕解析失败")
+    key = get_deepseek_key()
+    if not key:
+        raise RuntimeError("请先配置 AI API Key")
+
+    rows = []
+    for c in cues:
+        a, b = c["time"].split("-->")
+        rows.append(f'{c["i"]}\t{srt_time_to_seconds(a):.2f}\t{srt_time_to_seconds(b):.2f}\t{c["text"]}')
+    transcript = "\n".join(rows)[:45000]
+
+    system = "你是资深短视频剪辑师，只输出 JSON，不要输出解释。"
+    user = (
+        "下面是视频字幕（序号 / 开始秒 / 结束秒 / 文本）。请根据要求挑选最值得剪的片段。\n"
+        f"要求：{instruction}\n"
+        f"最多选 {max_clips} 段，每段大约 {clip_length} 秒（可在 0.5x-1.5x 之间浮动）。\n"
+        "片段之间不要重叠，时间必须在字幕范围内。\n"
+        '返回 JSON：{"clips":[{"start":12.3,"end":25.6,"title":"简短中文标题","reason":"为什么选它"}]}\n'
+        f"字幕：\n{transcript}"
+    )
+    raw = llm_chat(key, system, user, timeout=180)
+    obj = parse_json_loose(raw)
+    raw_clips = obj.get("clips", []) if isinstance(obj, dict) else []
+    duration = job.get("duration") or max(
+        srt_time_to_seconds(c["time"].split("-->")[1]) for c in cues)
+
+    clips = []
+    for x in raw_clips[:max_clips]:
+        try:
+            s = float(x["start"])
+            e = float(x["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        s = max(0.0, s)
+        e = min(duration, e)
+        if e - s < 0.5:
+            continue
+        clips.append({
+            "start": round(s, 2), "end": round(e, 2),
+            "title": str(x.get("title", "")).strip() or "片段",
+            "reason": str(x.get("reason", "")).strip(),
+        })
+    if not clips:
+        raise RuntimeError("AI 没有返回有效片段，请换个要求重试")
+    return clips
+
+
+def write_cut_srt(job, clips, out_path):
+    cues = parse_srt(read_text(Path(job.get("sub") or job.get("raw"))))
+    out = []
+    offset = 0.0
+    idx = 1
+    for clip in clips:
+        s, e = float(clip["start"]), float(clip["end"])
+        for cue in cues:
+            a, b = cue["time"].split("-->")
+            cs, ce = srt_time_to_seconds(a), srt_time_to_seconds(b)
+            if ce <= s or cs >= e:
+                continue
+            ns = max(cs, s) - s + offset
+            ne = min(ce, e) - s + offset
+            if ne - ns < 0.05:
+                continue
+            out.append({"i": idx,
+                        "time": f"{seconds_to_srt(ns)} --> {seconds_to_srt(ne)}",
+                        "text": cue["text"]})
+            idx += 1
+        offset += e - s
+    Path(out_path).write_text(build_srt(out), encoding="utf-8")
+
+
+def run_ai_edit(job, clips, options):
+    try:
+        if not job.get("path") or not Path(job["path"]).exists():
+            raise RuntimeError("原视频已被清理，请重新上传并保留原片")
+        job["aiEditState"] = "running"
+        job["aiEditProgress"] = 0
+        job["aiEditMessage"] = "准备剪辑…"
+        job["aiEditError"] = None
+        job["aiEditOutput"] = None
+        job["aiEditPlan"] = clips
+        persist_history()
+
+        video = Path(job["path"])
+        out_dir = job["dir"] / "AI_Edit" / ("edit_" + now_str())
+        out_dir.mkdir(parents=True, exist_ok=True)
+        seg_paths = []
+        n = len(clips)
+        total = sum(float(c["end"]) - float(c["start"]) for c in clips)
+
+        for i, clip in enumerate(clips):
+            s, e = float(clip["start"]), float(clip["end"])
+            seg = out_dir / f"seg_{i:03d}.mp4"
+            vf = []
+            if options.get("vertical"):
+                vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
+                       "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"]
+            vf += ["fps=30", "format=yuv420p"]
+            cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(video),
+                   "-vf", ",".join(vf), "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                   "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                   "-movflags", "+faststart", str(seg)]
+            run_ffmpeg_progress(job, cmd, e - s, f"剪辑片段 {i + 1}/{n}")
+            seg_paths.append(seg)
+            job["aiEditProgress"] = int((i + 1) / n * 80)
+            job["aiEditMessage"] = f"已完成 {i + 1}/{n} 段"
+
+        list_file = out_dir / "list.txt"
+        list_file.write_text("\n".join(f"file '{p.name}'" for p in seg_paths), encoding="utf-8")
+        concat = out_dir / "concat.mp4"
+        job["aiEditMessage"] = "拼接片段…"
+        run_ffmpeg_progress(
+            job,
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+             "-i", str(list_file), "-c", "copy", str(concat)],
+            total, "拼接中", cwd=str(out_dir),
+        )
+
+        final = concat
+        if options.get("burnSubtitles") or options.get("normalizeAudio"):
+            job["aiEditProgress"] = 85
+            job["aiEditMessage"] = "生成最终成片…"
+            cmd = ["ffmpeg", "-y", "-i", str(concat)]
+            if options.get("burnSubtitles"):
+                cut_srt = out_dir / "cut.srt"
+                write_cut_srt(job, clips, cut_srt)
+                cmd += ["-vf", f"subtitles={cut_srt.name}"]
+            if options.get("normalizeAudio"):
+                cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+            cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                    str(out_dir / "final.mp4")]
+            run_ffmpeg_progress(job, cmd, total, "合成中", cwd=str(out_dir))
+            final = out_dir / "final.mp4"
+
+        job["aiEditOutput"] = str(final)
+        job["aiEditState"] = "done"
+        job["aiEditProgress"] = 100
+        job["aiEditMessage"] = "AI 剪辑完成"
+        persist_history()
+    except Exception as e:  # noqa: BLE001
+        job["aiEditState"] = "error"
+        job["aiEditError"] = str(e)
+        job["aiEditMessage"] = "剪辑失败：" + str(e)
+        persist_history()
+
+
+def start_ai_edit(job, clips, options):
+    if job.get("aiEditState") == "running":
+        return False
+    job["aiEditState"] = "running"
+    job["aiEditProgress"] = 0
+    job["aiEditMessage"] = "准备剪辑…"
+    persist_history()
+    threading.Thread(target=run_ai_edit, args=(job, clips, options), daemon=True).start()
+    return True
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "SubtitleApp/2.0"
@@ -1925,6 +2125,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(404, {"error": "优化视频尚未生成"})
             out = Path(job["output"])
             return self.send_file_download(out, out.name)
+        if path == "/api/ai-edit/download":
+            job = JOBS.get((qs.get("job") or [""])[0])
+            if not job or not job.get("aiEditOutput") or not Path(job["aiEditOutput"]).exists():
+                return self.send_json(404, {"error": "成片尚未生成"})
+            out = Path(job["aiEditOutput"])
+            base = os.path.splitext(job["name"])[0]
+            return self.send_file_download(out, base + "_ai_edit.mp4")
         if path == "/api/video/open":
             job = VIDEO_JOBS.get((qs.get("job") or [""])[0])
             if not job:
@@ -2087,6 +2294,7 @@ class Handler(BaseHTTPRequestHandler):
             job["params"] = {
                 "sourceLang": src, "targetLang": tgt, "model": model,
                 "device": device, "computeType": compute, "engine": engine,
+                "keepVideo": bool(data.get("keepVideo", p.get("keepVideo", False))),
                 "deepseekKey": key if need_llm else "",
                 "initialPrompt": str(data.get("initialPrompt", p.get("initialPrompt", ""))).strip(),
                 "hotwords": str(data.get("hotwords", p.get("hotwords", ""))).strip(),
@@ -2199,6 +2407,40 @@ class Handler(BaseHTTPRequestHandler):
             if not key:
                 return self.send_json(400, {"error": "请先在设置中填写 DeepSeek API Key"})
             ok = start_video_diagnose(job, platform, key)
+            return self.send_json(200, {"ok": ok})
+
+        if path == "/api/ai-edit/plan":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            if not (job.get("sub") or job.get("raw")):
+                return self.send_json(400, {"error": "请先完成转录"})
+            try:
+                clips = ai_plan_clips(
+                    job,
+                    str(data.get("instruction", "")).strip() or "挑选最精彩、最完整的片段",
+                    int(data.get("maxClips", 5)),
+                    float(data.get("clipLength", 20)),
+                )
+                job["aiEditPlan"] = clips
+                persist_history()
+                return self.send_json(200, {"clips": clips})
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(500, {"error": str(e)})
+
+        if path == "/api/ai-edit/render":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            clips = data.get("clips") or job.get("aiEditPlan")
+            if not clips:
+                return self.send_json(400, {"error": "请先生成剪辑方案"})
+            options = {
+                "vertical": bool(data.get("vertical", False)),
+                "burnSubtitles": bool(data.get("burnSubtitles", True)),
+                "normalizeAudio": bool(data.get("normalizeAudio", True)),
+            }
+            ok = start_ai_edit(job, clips, options)
             return self.send_json(200, {"ok": ok})
 
         if path == "/api/cleanup":

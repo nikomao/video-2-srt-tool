@@ -180,6 +180,7 @@
       <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="ghost small" data-goto="1">环境检查 / 高级设置（向导）</button>
         <button class="ghost small" data-goto="8">🎞 平台视频规格检查</button>
+        <button class="ghost small" data-goto="9">✂️ AI 剪辑</button>
       </div>
     </div>
 
@@ -382,6 +383,45 @@
     </div>
   </section>
 
+  <!-- 9 AI 剪辑 -->
+  <section class="panel" data-step="9">
+    <div class="box">
+      <h2>⑨ AI 剪辑</h2>
+      <div class="desc">上传成片 → 自动转录 → DeepSeek 选片段 → ffmpeg 切段/拼接/竖屏/烧字幕。</div>
+      <div class="dropzone" id="aiDrop">
+        <div class="icon">✂️</div>
+        <div class="big">把最终成片拖到这里，开始 AI 剪辑</div>
+        <div class="hint">会自动转录并保留原片；中文/粤语可配合 SenseVoice</div>
+        <input type="file" id="aiInput" accept="video/*,.mkv,.mov,.avi,.webm" />
+      </div>
+      <div id="aiStatus" style="margin-top:14px"></div>
+      <div id="aiPlanBox" style="display:none;margin-top:16px">
+        <div class="field">
+          <input id="aiInstruction" placeholder="剪辑要求，例如：挑出最搞笑的 3 段，每段 15 秒" />
+          <button class="primary" id="aiPlanBtn">AI 选片段</button>
+        </div>
+        <div class="field" style="margin-top:8px">
+          <label class="chk">最多段数 <input id="aiMaxClips" type="number" value="5" style="width:64px;margin-left:6px" /></label>
+          <label class="chk">每段秒数 <input id="aiClipLen" type="number" value="20" style="width:64px;margin-left:6px" /></label>
+        </div>
+        <div id="aiPlanList" class="list" style="margin-top:12px"></div>
+        <div class="row" style="margin-top:12px">
+          <label class="chk"><input type="checkbox" id="aiVertical"> 竖屏 9:16</label>
+          <label class="chk"><input type="checkbox" id="aiBurn" checked> 烧字幕</label>
+          <label class="chk"><input type="checkbox" id="aiNorm" checked> 响度标准化</label>
+          <button class="primary" id="aiRenderBtn">生成成片</button>
+        </div>
+        <div class="msg" id="aiRenderMsg"></div>
+        <div class="bar" id="aiBar"><i></i></div>
+        <div class="row" id="aiActions"></div>
+      </div>
+      <div class="nav">
+        <button class="ghost" data-goto="0">回首页</button>
+        <button class="ghost" data-goto="8">平台适配</button>
+      </div>
+    </div>
+  </section>
+
   <footer>
     本地运行 · 视频不会上传到互联网 · 输出位于 D:\Codes\subtitle-webapp\work\&lt;任务&gt;\
   </footer>
@@ -404,7 +444,7 @@
 
 <script>
 const LANGS = {auto:'自动检测',zh:'中文（普通话）',yue:'粤语',en:'英语',ja:'日语',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
-const STEP_NAMES = ['首页','环境','视频语言','字幕语言','模型','生成','校对','历史','平台适配'];
+const STEP_NAMES = ['首页','环境','视频语言','字幕语言','模型','生成','校对','历史','平台适配','AI 剪辑'];
 
 const S = {
   step: 1,
@@ -1220,11 +1260,181 @@ async function pollVideo(){
   }catch(e){ vTimer=setTimeout(pollVideo,2500); }
 }
 
+/* ---------------- 9 AI 剪辑 ---------------- */
+let aiJob = null, aiTimer = null;
+
+function initAiPanel(){
+  const drop=$('#aiDrop'), input=$('#aiInput');
+  if(!drop||!input) return;
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) startAiFlow(e.dataTransfer.files[0]); });
+  drop.addEventListener('click',()=>input.click());
+  input.addEventListener('change',e=>{ if(e.target.files[0]) startAiFlow(e.target.files[0]); input.value=''; });
+  $('#aiPlanBtn').onclick=aiPlan;
+  $('#aiRenderBtn').onclick=aiRender;
+}
+
+function aiStatusHtml(msg, pct, state){
+  const p=Math.max(0,Math.min(100,pct||0));
+  return `<div class="msg">${esc(msg||'')}</div>
+    <div class="bar ${state==='done'?'done':state==='error'?'error':state==='running'?'running':''}"><i style="width:${p}%"></i></div>`;
+}
+
+function startAiFlow(file){
+  aiJob=null;
+  if(aiTimer){ clearTimeout(aiTimer); aiTimer=null; }
+  $('#aiPlanBox').style.display='none';
+  $('#aiPlanList').innerHTML='';
+  $('#aiActions').innerHTML='';
+  $('#aiStatus').innerHTML=aiStatusHtml('上传中…', 0, 'running');
+
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/upload?name='+encodeURIComponent(file.name));
+  xhr.upload.onprogress=e=>{ if(e.lengthComputable) $('#aiStatus').innerHTML=aiStatusHtml(`上传中… ${Math.round(e.loaded/e.total*100)}%`, Math.round(e.loaded/e.total*85), 'running'); };
+  xhr.onload=()=>{
+    if(xhr.status<200||xhr.status>=300){
+      let msg='上传失败'; try{msg=JSON.parse(xhr.responseText).error||msg;}catch(e){}
+      $('#aiStatus').innerHTML=aiStatusHtml(msg,0,'error'); return;
+    }
+    const res=JSON.parse(xhr.responseText);
+    aiJob=res.jobId;
+    const body={
+      jobId:aiJob, sourceLang:S.sourceLang, targetLang:'same',
+      model:S.model||'large-v3', device:S.device||'cuda', computeType:S.computeType||'float16',
+      engine:S.engine, keepVideo:true, initialPrompt:S.hotwords, hotwords:S.hotwords,
+    };
+    api('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(()=>{ $('#aiStatus').innerHTML=aiStatusHtml('转录中…',2,'running'); pollAiJob(); })
+      .catch(e=>{ $('#aiStatus').innerHTML=aiStatusHtml('启动失败：'+e.message,0,'error'); });
+  };
+  xhr.onerror=()=>{ $('#aiStatus').innerHTML=aiStatusHtml('上传失败：网络错误',0,'error'); };
+  xhr.send(file);
+}
+
+async function pollAiJob(){
+  if(!aiJob) return;
+  try{
+    const s=await api('/api/status?job='+encodeURIComponent(aiJob));
+    if(s.state==='error'){ $('#aiStatus').innerHTML=aiStatusHtml(s.message||'转录失败',0,'error'); return; }
+
+    if(s.state!=='done'){
+      $('#aiStatus').innerHTML=aiStatusHtml(`转录中… ${s.progress||0}% ${s.message||''}`, s.progress||0, 'running');
+      aiTimer=setTimeout(pollAiJob,1500);
+      return;
+    }
+
+    $('#aiStatus').innerHTML=aiStatusHtml('转录完成，可以 AI 选片段',100,'done');
+    $('#aiPlanBox').style.display='block';
+    if(s.aiEditPlan && !$('#aiPlanList').children.length) renderAiPlan(s.aiEditPlan);
+
+    if(s.aiEditState==='running'){
+      $('#aiRenderMsg').textContent=s.aiEditMessage||'剪辑中…';
+      $('#aiBar').className='bar running';
+      $('#aiBar>i').style.width=Math.max(3,Math.min(100,s.aiEditProgress||0))+'%';
+      $('#aiRenderBtn').disabled=true;
+      aiTimer=setTimeout(pollAiJob,1500);
+      return;
+    }
+    if(s.aiEditState==='done'){
+      $('#aiRenderMsg').textContent=s.aiEditMessage||'完成';
+      $('#aiBar').className='bar done';
+      $('#aiBar>i').style.width='100%';
+      $('#aiRenderBtn').disabled=false;
+      if(s.aiEditReady && !$('#aiActions').children.length){
+        const a=document.createElement('a');
+        a.href='/api/ai-edit/download?job='+encodeURIComponent(aiJob);
+        a.style.cssText='display:inline-block;padding:8px 14px;border:1px solid rgba(52,211,153,.4);border-radius:9px;color:#9af0cd;text-decoration:none;font-size:13px';
+        a.textContent='⬇ 下载 AI 剪辑成片';
+        $('#aiActions').appendChild(a);
+      }
+      return;
+    }
+    if(s.aiEditState==='error'){
+      $('#aiRenderMsg').textContent=s.aiEditError||'剪辑失败';
+      $('#aiBar').className='bar error';
+      $('#aiRenderBtn').disabled=false;
+      return;
+    }
+    $('#aiRenderBtn').disabled=false;
+    aiTimer=setTimeout(pollAiJob,1500);
+  }catch(e){
+    aiTimer=setTimeout(pollAiJob,2500);
+  }
+}
+
+function renderAiPlan(clips){
+  const el=$('#aiPlanList'); el.innerHTML='';
+  (clips||[]).forEach((c,i)=>{
+    const card=document.createElement('div'); card.className='card'; card.style.padding='11px 13px';
+    card.innerHTML=`
+      <div class="row" style="margin-top:0;align-items:center">
+        <label class="chk"><input type="checkbox" class="ai-use" checked> 使用</label>
+        <input data-start="${i}" value="${c.start}" style="width:78px;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font:inherit" />
+        <span style="color:var(--muted)">→</span>
+        <input data-end="${i}" value="${c.end}" style="width:78px;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font:inherit" />
+        <b style="font-size:13px">${esc(c.title||'片段')}</b>
+      </div>
+      <div class="meta" style="margin-top:6px">${esc(c.reason||'')}</div>`;
+    el.appendChild(card);
+  });
+}
+
+async function aiPlan(){
+  if(!aiJob){ alert('请先上传视频并完成转录'); return; }
+  const instruction=$('#aiInstruction').value.trim() || '挑选最精彩、最完整的片段';
+  try{
+    $('#aiPlanBtn').disabled=true;
+    $('#aiPlanBtn').textContent='分析中…';
+    const res=await api('/api/ai-edit/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({jobId:aiJob,instruction,maxClips:parseInt($('#aiMaxClips').value)||5,
+        clipLength:parseFloat($('#aiClipLen').value)||20})});
+    renderAiPlan(res.clips);
+    $('#aiRenderMsg').textContent='AI 已给出方案，可修改时间后生成成片';
+    $('#aiBar').className='bar'; $('#aiBar>i').style.width='0%';
+    $('#aiActions').innerHTML='';
+  }catch(e){
+    alert('AI 选片段失败：'+e.message+'\n\n请先在「④ 模型」配置 AI Key。');
+  }finally{
+    $('#aiPlanBtn').disabled=false;
+    $('#aiPlanBtn').textContent='AI 选片段';
+  }
+}
+
+async function aiRender(){
+  if(!aiJob){ alert('请先上传视频'); return; }
+  const cards=[...document.querySelectorAll('#aiPlanList .card')];
+  const clips=[];
+  cards.forEach(card=>{
+    const use=card.querySelector('.ai-use');
+    if(!use||!use.checked) return;
+    const start=parseFloat(card.querySelector('[data-start]').value);
+    const end=parseFloat(card.querySelector('[data-end]').value);
+    if(isNaN(start)||isNaN(end)||end<=start) return;
+    clips.push({start,end,title:card.querySelector('b').textContent,reason:''});
+  });
+  if(!clips.length){ alert('至少勾选一段有效片段（结束时间要大于开始时间）'); return; }
+  try{
+    $('#aiRenderBtn').disabled=true;
+    $('#aiRenderMsg').textContent='开始剪辑…';
+    $('#aiBar').className='bar running'; $('#aiBar>i').style.width='3%';
+    $('#aiActions').innerHTML='';
+    await api('/api/ai-edit/render',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({jobId:aiJob,clips,vertical:$('#aiVertical').checked,
+        burnSubtitles:$('#aiBurn').checked,normalizeAudio:$('#aiNorm').checked})});
+    pollAiJob();
+  }catch(e){
+    $('#aiRenderBtn').disabled=false;
+    alert('无法生成成片：'+e.message);
+  }
+}
+
 /* ---------------- 初始化 ---------------- */
 buildStepper();
 initLang();
 initHome();
 initVideoPanel();
+initAiPanel();
 const hwEl=$('#hotwordsInput');
 if(hwEl){ hwEl.value=S.hotwords; hwEl.oninput=()=>{S.hotwords=hwEl.value;localStorage.setItem('hotwords',hwEl.value);}; }
 const aeEl=$('#asrEngine');
