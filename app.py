@@ -17,6 +17,7 @@
 
 import codecs
 import ctypes
+import importlib.util
 import json
 import os
 import platform
@@ -38,6 +39,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parent
 WORK_DIR = APP_DIR / "work"
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+SENSEVOICE_WORKER = APP_DIR / "sensevoice_worker.py"
 CONFIG_PATH = APP_DIR / "config.json"
 HISTORY_PATH = APP_DIR / "history.json"
 
@@ -52,6 +54,7 @@ TOOL_ARCHIVE_URL = (
 )
 SEVENZIP_URL = "https://www.7-zip.org/a/7zr.exe"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
 HOST = "127.0.0.1"
 START_PORT = 8000
@@ -244,8 +247,19 @@ def save_config(cfg):
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def get_llm():
+    cfg = load_config()
+    provider = (cfg.get("llmProvider") or "deepseek").lower()
+    if provider == "qwen":
+        key = (cfg.get("dashscopeKey") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+        return "qwen", key
+    key = (cfg.get("deepseekKey") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    return "deepseek", key
+
+
 def get_deepseek_key():
-    return (load_config().get("deepseekKey") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    """当前启用的 AI 服务 Key（兼容旧调用）。"""
+    return get_llm()[1]
 
 
 def mask_key(k):
@@ -322,11 +336,20 @@ def installed_models():
     return sorted([p.name for p in MODEL_DIR.iterdir() if p.is_dir()])
 
 
+def sense_available():
+    try:
+        return (importlib.util.find_spec("funasr") is not None
+                and importlib.util.find_spec("torch") is not None)
+    except Exception:
+        return False
+
+
 def check_env(force=False):
     if not force and _ENV_CACHE["data"] and time.time() - _ENV_CACHE["ts"] < 20:
         return _ENV_CACHE["data"]
 
     exe = find_exe()
+    sense_ok = sense_available()
     gpus = _nvidia_gpus()
     ram = _total_ram_gb()
     try:
@@ -335,7 +358,12 @@ def check_env(force=False):
         free_gb = 0.0
     ffmpeg = shutil.which("ffmpeg")
     models = installed_models()
-    key = get_deepseek_key()
+    cfg = load_config()
+    provider = (cfg.get("llmProvider") or "deepseek").lower()
+    deepseek_key = (cfg.get("deepseekKey") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    qwen_key = (cfg.get("dashscopeKey") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+    key = qwen_key if provider == "qwen" else deepseek_key
+    provider_label = "Qwen (DashScope)" if provider == "qwen" else "DeepSeek"
 
     items = [
         {"key": "python", "label": "Python 运行环境", "status": "ok",
@@ -343,6 +371,9 @@ def check_env(force=False):
         {"key": "tool", "label": "转录引擎 faster-whisper-xxl",
          "status": "ok" if exe else "warn",
          "detail": str(exe) if exe else "未安装，首次生成时会自动下载（约 1～2GB）"},
+        {"key": "sensevoice", "label": "SenseVoice 转录引擎",
+         "status": "ok" if sense_ok else "warn",
+         "detail": "已安装（中文/粤语推荐）" if sense_ok else "未安装，仅 Whisper 可用"},
         {"key": "gpu", "label": "NVIDIA GPU",
          "status": "ok" if gpus else "warn",
          "detail": "；".join(f'{g["name"]} · {g["vram_mb"] / 1024:.1f}GB · 驱动 {g["driver"]}' for g in gpus)
@@ -361,9 +392,9 @@ def check_env(force=False):
         {"key": "model", "label": "已下载模型",
          "status": "ok" if models else "warn",
          "detail": "、".join(models) if models else "未下载，首次生成时自动准备"},
-        {"key": "deepseek", "label": "DeepSeek API Key",
+        {"key": "deepseek", "label": f"AI 服务（{provider_label}）",
          "status": "ok" if key else "warn",
-         "detail": ("已配置 " + mask_key(key)) if key else "未配置（字幕校对 / 中文等翻译需要）"},
+         "detail": ("已配置 " + mask_key(key)) if key else f"未配置 {provider_label} Key（字幕校对 / 翻译 / 文案需要）"},
     ]
 
     data = {
@@ -376,7 +407,10 @@ def check_env(force=False):
         "disk_free_gb": free_gb,
         "models": models,
         "toolInstalled": bool(exe),
-        "deepseekConfigured": bool(key),
+        "sensevoiceInstalled": sense_ok,
+        "llmProvider": provider,
+        "deepseekConfigured": bool(deepseek_key),
+        "qwenConfigured": bool(qwen_key),
         "python": sys.version.split()[0],
     }
     _ENV_CACHE["ts"] = time.time()
@@ -481,10 +515,19 @@ def recommend_model(pref="balanced", source="auto"):
                "speed": " 已按“速度优先”选择。",
                "balanced": " 已按“均衡”选择。"}.get(pref, "")
 
+    engine = "sensevoice" if source in ("zh", "yue") else "whisper"
+    if engine == "sensevoice" and not sense_available():
+        engine = "whisper"
+    if source in ("zh", "yue"):
+        reason += " 转录引擎：SenseVoice（中文/粤语专用，VAD 分段时间轴）。"
+    else:
+        reason += " 转录引擎：Whisper（多语言）。"
+
     return {
         "model": model,
         "device": device,
         "computeType": compute,
+        "engine": engine,
         "reason": reason,
         "preference": pref,
         "options": [{
@@ -672,43 +715,52 @@ def parse_json_loose(s):
         raise
 
 
-def deepseek_chat(api_key, system, user, json_mode=True, timeout=180):
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.2,
-        "stream": False,
-    }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        DEEPSEEK_URL, data=data, method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-    )
+def llm_chat(api_key, system, user, json_mode=True, timeout=180):
+    provider = (load_config().get("llmProvider") or "deepseek").lower()
+    if provider == "qwen":
+        url = QWEN_URL
+        model = "qwen-plus"
+    else:
+        url = DEEPSEEK_URL
+        model = "deepseek-chat"
+
     last_err = None
     for attempt in range(4):
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.2,
+            "stream": False,
+        }
+        # DeepSeek 支持严格 JSON；Qwen 用提示词 + 容错解析
+        if json_mode and provider != "qwen":
+            payload["response_format"] = {"type": "json_object"}
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 obj = json.loads(r.read().decode("utf-8"))
             return obj["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")
-            last_err = f"DeepSeek API 错误 {e.code}: {body[:300]}"
+            last_err = f"AI API 错误 {e.code}: {body[:300]}"
             if e.code in (429, 500, 502, 503) and attempt < 3:
                 time.sleep(2 * (attempt + 1))
                 continue
             raise RuntimeError(last_err)
         except Exception as e:  # noqa: BLE001
-            last_err = f"DeepSeek 请求失败: {e}"
+            last_err = f"AI 请求失败: {e}"
             if attempt < 3:
                 time.sleep(2 * (attempt + 1))
                 continue
             raise RuntimeError(last_err)
-    raise RuntimeError(last_err or "DeepSeek 请求失败")
+    raise RuntimeError(last_err or "AI 请求失败")
 
 
 def llm_translate(job, cues, target_label, api_key):
@@ -725,7 +777,7 @@ def llm_translate(job, cues, target_label, api_key):
             f'返回 JSON：{{"items":[{{"i":序号,"t":"译文"}}]}}\n'
             f"输入：{json.dumps(payload, ensure_ascii=False)}"
         )
-        raw = deepseek_chat(api_key, system, user)
+        raw = llm_chat(api_key, system, user)
         obj = parse_json_loose(raw)
         mp = {int(x["i"]): str(x.get("t", "")).strip() for x in obj.get("items", [])}
         for c in batch:
@@ -753,7 +805,7 @@ def llm_review(job, cues, lang_label, api_key):
             f'返回 JSON：{{"items":[{{"i":序号,"t":"修正后文本"}}],"notes":"总体说明"}}\n'
             f"输入：{json.dumps(payload, ensure_ascii=False)}"
         )
-        raw = deepseek_chat(api_key, system, user)
+        raw = llm_chat(api_key, system, user)
         obj = parse_json_loose(raw)
         mp = {int(x["i"]): str(x.get("t", "")).strip() for x in obj.get("items", [])}
         if obj.get("notes"):
@@ -814,6 +866,10 @@ def run_process(job, cmd, base, span):
 
 def handle_line(job, line, base, span):
     add_log(job, line)
+    mp = re.search(r"PROGRESS\s+(\d{1,3})", line)
+    if mp:
+        pct = max(0, min(100, int(mp.group(1))))
+        job["progress"] = min(99, base + int(span * pct / 100))
     m = re.search(r"(\d{1,3})%", line)
     if m:
         pct = max(0, min(100, int(m.group(1))))
@@ -892,11 +948,25 @@ def run_transcribe(job, params, task, out_dir, base, span):
 def run_job(job):
     try:
         params = job["params"]
-        job["exe"] = ensure_tool(job)
-        seed_model(job, params["model"])
-        model_folder = MODELS[params["model"]]["folder"]
-        if not (MODEL_DIR / model_folder / "model.bin").exists():
-            raise RuntimeError(f"模型 {params['model']} 尚未下载完成，请稍后重试")
+        src = params["sourceLang"]
+        tgt = params["targetLang"]
+        engine = params.get("engine", "auto")
+        if engine == "auto":
+            engine = "sensevoice" if src in ("zh", "yue") else "whisper"
+        if engine == "sensevoice" and not sense_available():
+            add_log(job, "SenseVoice 未安装，回退 Whisper")
+            engine = "whisper"
+        if engine == "sensevoice" and src not in ("auto", "zh", "yue", "en", "ja", "ko"):
+            add_log(job, f"SenseVoice 不支持语言 {src}，回退 Whisper")
+            engine = "whisper"
+        job["engine"] = engine
+
+        if engine == "whisper":
+            job["exe"] = ensure_tool(job)
+            seed_model(job, params["model"])
+            model_folder = MODELS[params["model"]]["folder"]
+            if not (MODEL_DIR / model_folder / "model.bin").exists():
+                raise RuntimeError(f"模型 {params['model']} 尚未下载完成，请稍后重试")
 
         video = Path(job["path"])
         # 用纯 ASCII 文件名跑工具：避免全角/日文/空格文件名导致工具写 SRT 时崩溃
@@ -920,11 +990,31 @@ def run_job(job):
         raw_dir.mkdir(parents=True, exist_ok=True)
         sub_dir.mkdir(parents=True, exist_ok=True)
 
-        src = params["sourceLang"]
-        tgt = params["targetLang"]
         base = os.path.splitext(job["name"])[0]
 
-        if tgt == "same" or tgt == src:
+        if engine == "sensevoice":
+            set_state(job, "transcribing", "SenseVoice 转录中…", 2)
+            raw_srt = raw_dir / f"{base}.srt"
+            cmd = [sys.executable, "-u", str(SENSEVOICE_WORKER), str(run_video),
+                   "--output", str(raw_srt), "--language", src, "--device", "cpu"]
+            run_process(job, cmd, 2, 60)
+            if not raw_srt.exists():
+                raise RuntimeError("SenseVoice 未生成字幕文件")
+            job["raw"] = str(raw_srt)
+            if tgt in ("same", src):
+                job["sub"] = str(raw_srt)
+            else:
+                key = get_deepseek_key()
+                if not key:
+                    raise RuntimeError("翻译到该语言需要 AI API Key，请在设置中填写后重试")
+                provider, _ = get_llm()
+                set_state(job, "translating", f"AI 翻译中（{provider}）…", 65)
+                cues = parse_srt(read_text(raw_srt))
+                translated = llm_translate(job, cues, LANGUAGES.get(tgt, tgt), key)
+                sub_path = sub_dir / f"{base}_{tgt}.srt"
+                sub_path.write_text(build_srt(translated), encoding="utf-8")
+                job["sub"] = str(sub_path)
+        elif tgt == "same" or tgt == src:
             set_state(job, "transcribing", "正在生成字幕…", 2)
             run_transcribe(job, params, "transcribe", raw_dir, 2, 96)
             p = first_srt(raw_dir)
@@ -947,10 +1037,11 @@ def run_job(job):
                 raise RuntimeError("未生成原语言字幕")
             job["raw"] = raw
 
-            key = params.get("deepseekKey") or get_deepseek_key()
+            key = get_deepseek_key()
             if not key:
-                raise RuntimeError("翻译到该语言需要 DeepSeek API Key，请在设置中填写后重试")
-            set_state(job, "translating", "AI 翻译中（DeepSeek）…", 50)
+                raise RuntimeError("翻译到该语言需要 AI API Key，请在设置中填写后重试")
+            provider, _ = get_llm()
+            set_state(job, "translating", f"AI 翻译中（{provider}）…", 50)
             cues = parse_srt(read_text(Path(raw)))
             translated = llm_translate(job, cues, LANGUAGES.get(tgt, tgt), key)
             sub_path = sub_dir / f"{base}_{tgt}.srt"
@@ -1076,6 +1167,7 @@ def job_public(job):
         "reviewReport": job.get("reviewReport"),
         "reviewError": job.get("reviewError"),
         "detectedLang": job.get("detectedLang"),
+        "engine": job.get("engine"),
         "params": job.get("params"),
         "created": job.get("created"),
         "path": job.get("path"),
@@ -1242,7 +1334,7 @@ def _publish_platform(api_key, platform, transcript):
         '返回严格 JSON：{"title":"英文标题","description":"英文简介/caption"}\n'
         f"字幕内容：\n{transcript}"
     )
-    raw = deepseek_chat(api_key, system, user, timeout=180)
+    raw = llm_chat(api_key, system, user, timeout=180)
     obj = parse_json_loose(raw)
     if isinstance(obj, dict) and platform in obj and isinstance(obj[platform], dict):
         obj = obj[platform]
@@ -1322,7 +1414,7 @@ def _adjust_platform(api_key, platform, current, instruction, transcript):
         '返回严格 JSON：{"title":"英文标题","description":"英文简介/caption"}\n'
         f"字幕参考：\n{transcript[:8000]}"
     )
-    raw = deepseek_chat(api_key, system, user, timeout=180)
+    raw = llm_chat(api_key, system, user, timeout=180)
     obj = parse_json_loose(raw)
     if isinstance(obj, dict) and platform in obj and isinstance(obj[platform], dict):
         obj = obj[platform]
@@ -1668,7 +1760,7 @@ def run_video_diagnose(job, platform, api_key):
             '返回 JSON：{"ok":true/false,"issues":["..."],"recommendations":["..."],"ffmpeg_args":"..."}\n'
             "ffmpeg_args 不要包含输入文件，只给输出参数。"
         )
-        raw = deepseek_chat(api_key, system, user, timeout=120)
+        raw = llm_chat(api_key, system, user, timeout=120)
         obj = parse_json_loose(raw)
         job.setdefault("diagnose", {})[platform] = obj
         job["diagnoseState"] = "done"
@@ -1848,8 +1940,17 @@ class Handler(BaseHTTPRequestHandler):
             env = check_env(force=force)
             return self.send_json(200, env)
         if path == "/api/config":
-            k = get_deepseek_key()
-            return self.send_json(200, {"hasKey": bool(k), "masked": mask_key(k)})
+            cfg = load_config()
+            provider = (cfg.get("llmProvider") or "deepseek").lower()
+            dk = (cfg.get("deepseekKey") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+            qk = (cfg.get("dashscopeKey") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+            active = qk if provider == "qwen" else dk
+            return self.send_json(200, {
+                "provider": provider,
+                "hasKey": bool(active), "masked": mask_key(active),
+                "deepseekHasKey": bool(dk), "deepseekMasked": mask_key(dk),
+                "qwenHasKey": bool(qk), "qwenMasked": mask_key(qk),
+            })
         if path == "/api/status":
             job = JOBS.get((qs.get("job") or [""])[0])
             if not job:
@@ -1905,15 +2006,30 @@ class Handler(BaseHTTPRequestHandler):
                 data.get("preference", "balanced"), data.get("sourceLang", "auto")))
 
         if path == "/api/config":
-            key = str(data.get("deepseekKey", "")).strip()
             cfg = load_config()
-            if key:
-                cfg["deepseekKey"] = key
-            else:
-                cfg.pop("deepseekKey", None)
+            if "deepseekKey" in data:
+                k = str(data.get("deepseekKey") or "").strip()
+                if k:
+                    cfg["deepseekKey"] = k
+                else:
+                    cfg.pop("deepseekKey", None)
+            if "dashscopeKey" in data:
+                k = str(data.get("dashscopeKey") or "").strip()
+                if k:
+                    cfg["dashscopeKey"] = k
+                else:
+                    cfg.pop("dashscopeKey", None)
+            if "llmProvider" in data:
+                p = str(data.get("llmProvider") or "").strip().lower()
+                if p in ("deepseek", "qwen"):
+                    cfg["llmProvider"] = p
             save_config(cfg)
             _ENV_CACHE["data"] = None
-            return self.send_json(200, {"ok": True, "hasKey": bool(get_deepseek_key())})
+            provider, active = get_llm()
+            return self.send_json(200, {
+                "ok": True, "provider": provider,
+                "hasKey": bool(active), "masked": mask_key(active),
+            })
 
         if path == "/api/adopt":
             dirname = str(data.get("dir", "")).strip()
@@ -1949,6 +2065,11 @@ class Handler(BaseHTTPRequestHandler):
             model = data.get("model", p.get("model", "large-v3"))
             device = data.get("device", p.get("device", "cuda"))
             compute = data.get("computeType", p.get("computeType", "float16"))
+            engine = data.get("engine", p.get("engine", "auto"))
+            if engine not in ("auto", "whisper", "sensevoice"):
+                return self.send_json(400, {"error": "转录引擎无效"})
+            if engine == "sensevoice" and src not in ("auto", "zh", "yue", "en", "ja", "ko"):
+                return self.send_json(400, {"error": "SenseVoice 不支持该语言，请改用 Whisper"})
             if src not in LANGUAGES:
                 return self.send_json(400, {"error": "视频语言无效"})
             if tgt != "same" and tgt not in LANGUAGES:
@@ -1965,7 +2086,7 @@ class Handler(BaseHTTPRequestHandler):
 
             job["params"] = {
                 "sourceLang": src, "targetLang": tgt, "model": model,
-                "device": device, "computeType": compute,
+                "device": device, "computeType": compute, "engine": engine,
                 "deepseekKey": key if need_llm else "",
                 "initialPrompt": str(data.get("initialPrompt", p.get("initialPrompt", ""))).strip(),
                 "hotwords": str(data.get("hotwords", p.get("hotwords", ""))).strip(),

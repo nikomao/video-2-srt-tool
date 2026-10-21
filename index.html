@@ -246,6 +246,15 @@
         <select id="modelSelect" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
       </div>
       <div class="meta" id="modelDesc" style="margin-top:7px"></div>
+      <div style="margin-top:16px">
+        <div style="font-size:13.5px;font-weight:600">转录引擎</div>
+        <select id="asrEngine" style="width:100%;margin-top:6px;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit">
+          <option value="auto">自动（中文/粤语用 SenseVoice，其他用 Whisper）</option>
+          <option value="whisper">Whisper（多语言）</option>
+          <option value="sensevoice">SenseVoice（中/粤/英/日/韩，CPU 也很快）</option>
+        </select>
+        <div class="meta" style="margin-top:5px">SenseVoice 适合中文/粤语；日语/德语建议 Whisper（自动模式已按此路由）。</div>
+      </div>
       <div style="margin-top:18px">
         <div style="font-size:13.5px;font-weight:600">专有名词 / 角色名（可选，强烈推荐）</div>
         <div class="sub" style="margin-top:4px">填写动画名、角色名、专有名词，可显著减少同音词错误（如 買って/勝って）。</div>
@@ -254,10 +263,19 @@
       </div>
 
       <div style="margin-top:20px;border-top:1px solid var(--line);padding-top:16px">
-        <div style="font-size:13.5px;font-weight:600">DeepSeek API Key（可选）</div>
-        <div class="sub" style="margin-top:4px">用于「字幕校对」，以及翻译成英语以外的目标语言。仅保存在本机 config.json。</div>
-        <div class="field">
-          <input id="dsKey" type="password" placeholder="sk-..." autocomplete="off" />
+        <div style="font-size:13.5px;font-weight:600">AI 服务（翻译 / 校对 / 平台文案）</div>
+        <div class="sub" style="margin-top:4px">支持 DeepSeek 和 Qwen（DashScope）。Key 仅保存在本机 config.json。</div>
+        <div class="field" style="margin-top:8px">
+          <select id="llmProvider" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit">
+            <option value="deepseek">DeepSeek（deepseek-chat）</option>
+            <option value="qwen">Qwen（DashScope · qwen-plus）</option>
+          </select>
+        </div>
+        <div class="field" style="margin-top:8px">
+          <input id="dsKey" type="password" placeholder="DeepSeek Key（sk-...）" autocomplete="off" />
+        </div>
+        <div class="field" style="margin-top:8px">
+          <input id="qwenKey" type="password" placeholder="DashScope Key（sk-...）" autocomplete="off" />
           <button class="small" id="saveKey">保存</button>
         </div>
         <div class="meta" id="dsStatus" style="margin-top:7px"></div>
@@ -394,6 +412,7 @@ const S = {
   sourceLang: localStorage.getItem('srcLang') || 'auto',
   targetLang: localStorage.getItem('tgtLang') || 'same',
   preference: localStorage.getItem('pref') || 'balanced',
+  engine: localStorage.getItem('engine') || 'auto',
   hotwords: localStorage.getItem('hotwords') || '',
   rec: null,
   model: null,
@@ -530,6 +549,7 @@ function renderRec(){
   $('#recBox').innerHTML = `
     <div class="big">${esc(rec.model)}</div>
     <div class="chips">
+      <span class="chip">引擎：${esc(rec.engine||'whisper')}</span>
       <span class="chip">设备：${esc(rec.device)}</span>
       <span class="chip">精度：${esc(rec.computeType)}</span>
       <span class="chip">偏好：${({quality:'质量优先',balanced:'均衡',speed:'速度优先'})[rec.preference]||rec.preference}</span>
@@ -566,17 +586,34 @@ $('#to5').onclick=()=>{ updateSummary(); go(5); };
 async function loadKeyStatus(){
   try{
     const c = await api('/api/config');
-    $('#dsStatus').textContent = c.hasKey ? ('已配置：' + c.masked) : '未配置（字幕校对 / 中文等翻译需要）';
-    if (c.hasKey) $('#dsStatus').style.color='var(--ok)'; else $('#dsStatus').style.color='var(--muted)';
+    const prov=$('#llmProvider'); if(prov) prov.value=c.provider||'deepseek';
+    const parts=[];
+    parts.push(c.deepseekHasKey?('DeepSeek: '+c.deepseekMasked):'DeepSeek: 未配置');
+    parts.push(c.qwenHasKey?('Qwen: '+c.qwenMasked):'Qwen: 未配置');
+    const el=$('#dsStatus');
+    if(el){
+      el.textContent=parts.join(' · ') + (c.hasKey?'':'（当前服务未配置 Key）');
+      el.style.color=c.hasKey?'var(--ok)':'var(--muted)';
+    }
   }catch(e){}
 }
-$('#saveKey').onclick=async()=>{
-  const key=$('#dsKey').value.trim();
+$('#llmProvider').onchange=async()=>{
   try{
-    await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deepseekKey:key})});
-    $('#dsKey').value='';
+    await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llmProvider:$('#llmProvider').value})});
     await loadKeyStatus();
-    alert(key?'已保存 DeepSeek Key':'已清除 DeepSeek Key');
+  }catch(e){ alert('切换失败：'+e.message); }
+};
+$('#saveKey').onclick=async()=>{
+  const payload={llmProvider:$('#llmProvider').value};
+  const dk=$('#dsKey').value.trim();
+  const qk=$('#qwenKey').value.trim();
+  if(dk) payload.deepseekKey=dk;
+  if(qk) payload.dashscopeKey=qk;
+  try{
+    await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    $('#dsKey').value=''; $('#qwenKey').value='';
+    await loadKeyStatus();
+    alert('已保存');
   }catch(e){ alert('保存失败：'+e.message); }
 };
 
@@ -604,7 +641,7 @@ async function addFiles(files){
     const item={key:'k'+(++S.seq),jobId:null,file,name:file.name,size:file.size,
       state:'uploading',progress:0,message:'准备上传…',logs:[],subReady:false,rawReady:false,
       reviewedReady:false,reviewState:'idle',reviewProgress:0,reviewMessage:'',reviewReport:null,
-      elapsed:0,params:{...{sourceLang:S.sourceLang,targetLang:S.targetLang,model:S.model,device:S.device,computeType:S.computeType,initialPrompt:S.hotwords,hotwords:S.hotwords}}};
+      elapsed:0,params:{...{sourceLang:S.sourceLang,targetLang:S.targetLang,model:S.model,device:S.device,computeType:S.computeType,engine:S.engine,initialPrompt:S.hotwords,hotwords:S.hotwords}}};
     S.items.set(item.key,item);
     createCard(item);
     uploadItem(item);
@@ -903,7 +940,7 @@ function syncHomeControls(){
 function renderHomeEnv(){
   const el=$('#homeEnv'); if(!el) return;
   if(!S.env){ el.innerHTML=''; return; }
-  const keys=['gpu','tool','model','deepseek'];
+  const keys=['gpu','tool','sensevoice','model','deepseek'];
   el.innerHTML=keys.map(k=>{
     const it=(S.env.items||[]).find(x=>x.key===k); if(!it) return '';
     const color=it.status==='ok'?'var(--ok)':it.status==='warn'?'var(--warn)':'var(--err)';
@@ -967,7 +1004,7 @@ function historyCard(j){
 }
 function dlJ(j,lang){ window.location.href=`/api/download?job=${encodeURIComponent(j.id)}&lang=${lang}`; }
 async function continueJob(j){
-  const p=j.params||{sourceLang:'auto',targetLang:'same',model:'large-v3',device:'cuda',computeType:'float16'};
+  const p=j.params||{sourceLang:'auto',targetLang:'same',model:'large-v3',device:'cuda',computeType:'float16',engine:S.engine};
   try{
     await api('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id,...p})});
     alert('已开始生成，进度可在「⑤ 生成字幕」或本页刷新查看。');
@@ -1190,6 +1227,8 @@ initHome();
 initVideoPanel();
 const hwEl=$('#hotwordsInput');
 if(hwEl){ hwEl.value=S.hotwords; hwEl.oninput=()=>{S.hotwords=hwEl.value;localStorage.setItem('hotwords',hwEl.value);}; }
+const aeEl=$('#asrEngine');
+if(aeEl){ aeEl.value=S.engine; aeEl.onchange=()=>{S.engine=aeEl.value;localStorage.setItem('engine',aeEl.value);}; }
 document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x.dataset.pref===S.preference));
 updateSummary();
 updateNextButtons();

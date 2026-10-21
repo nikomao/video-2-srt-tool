@@ -72,6 +72,24 @@
 已下载的模型位于 `%LOCALAPPDATA%\AnimeSubtitleTools\models`，可选：
 `large-v3`、`large-v3-turbo`、`distil-large-v3`、`medium`、`small`、`base`、`tiny`。
 
+## AI 服务（DeepSeek / Qwen）
+
+第④步可选择：
+
+- **DeepSeek**（`deepseek-chat`）
+- **Qwen**（DashScope · `qwen-plus`）
+
+用于字幕翻译、AI 校对、平台文案、视频规格深度检查。Key 只保存在本机 `config.json`，不会上传。
+
+## 转录引擎
+
+- **Whisper**（faster-whisper-xxl）：多语言，`large-v3` 质量最佳，支持 CUDA
+- **SenseVoice**（FunASR）：中文/粤语专用，CPU 也很快，用 FSMN-VAD 分段时间轴
+- **自动模式**：中文/粤语 → SenseVoice；其他语言 → Whisper
+- SenseVoice 不支持德语；日语实测 Whisper 更稳（同音词更少）
+
+依赖：系统 Python 需要 `torch`、`funasr`、`modelscope`、`kaldi-native-fbank`、`soundfile`（已安装）。
+
 ## 启动
 
 - 双击桌面的 **「视频字幕生成器」** 图标，或
