@@ -12,6 +12,8 @@ config.json
 
 # 运行时历史记录
 history.json
+video_history.json
+video-work/
 
 # 编辑器 / 系统
 .vscode/

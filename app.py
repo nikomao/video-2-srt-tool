@@ -96,6 +96,59 @@ PLATFORMS = {
     "reddit": "Reddit",
 }
 
+PLATFORM_VIDEO_SPECS = {
+    "reddit": {
+        "label": "Reddit", "container": ["mp4", "mov"], "vcodec": ["h264"], "acodec": ["aac"],
+        "max_w": 1920, "max_h": 1080, "max_fps": 30, "max_duration": 900,
+        "max_size_mb": 1024, "crf": 20, "maxrate": "8M", "bufsize": "16M",
+        "min_h": 720, "min_bitrate": 500000,
+        "vertical": False,
+        "note": "H.264 8-bit 4:2:0 + AAC 48kHz，恒定帧率，faststart；≤15 分钟 / ≤1GB / ≤1080p。VFR、10-bit、4:2:2、非 AAC、MOV 容器、过低分辨率/码率都容易导致 Reddit 处理失败。",
+    },
+    "youtube": {
+        "label": "YouTube", "container": ["mp4", "mov"], "vcodec": ["h264", "hevc"], "acodec": ["aac"],
+        "max_w": 3840, "max_h": 2160, "max_fps": 60, "max_duration": 43200,
+        "max_size_mb": 128000, "crf": 18, "maxrate": None, "bufsize": None,
+        "vertical": False, "note": "H.264 + AAC，1080p/4K，faststart",
+    },
+    "tiktok": {
+        "label": "TikTok", "container": ["mp4", "mov"], "vcodec": ["h264", "hevc"], "acodec": ["aac"],
+        "max_w": 1080, "max_h": 1920, "max_fps": 60, "max_duration": 3600,
+        "max_size_mb": 4096, "crf": 20, "maxrate": None, "bufsize": None,
+        "vertical": True, "note": "竖屏 9:16，1080×1920，H.264 + AAC",
+    },
+    "instagram": {
+        "label": "Instagram Reels", "container": ["mp4", "mov"], "vcodec": ["h264", "hevc"], "acodec": ["aac"],
+        "max_w": 1080, "max_h": 1920, "max_fps": 30, "max_duration": 180,
+        "max_size_mb": 1024, "crf": 20, "maxrate": None, "bufsize": None,
+        "vertical": True, "note": "竖屏 9:16，建议 ≤90 秒，H.264 + AAC",
+    },
+    "x": {
+        "label": "X (Twitter)", "container": ["mp4", "mov"], "vcodec": ["h264"], "acodec": ["aac"],
+        "max_w": 1920, "max_h": 1080, "max_fps": 60, "max_duration": 140,
+        "max_size_mb": 512, "crf": 20, "maxrate": "6M", "bufsize": "12M",
+        "vertical": False, "note": "H.264 + AAC，≤2:20 / ≤512MB（免费账号）",
+    },
+    "facebook": {
+        "label": "Facebook", "container": ["mp4", "mov"], "vcodec": ["h264", "hevc"], "acodec": ["aac"],
+        "max_w": 1920, "max_h": 1080, "max_fps": 60, "max_duration": 14400,
+        "max_size_mb": 10240, "crf": 20, "maxrate": None, "bufsize": None,
+        "vertical": False, "note": "H.264 + AAC，1080p",
+    },
+    "bilibili": {
+        "label": "Bilibili", "container": ["mp4", "flv"], "vcodec": ["h264", "hevc"], "acodec": ["aac"],
+        "max_w": 1920, "max_h": 1080, "max_fps": 60, "max_duration": 43200,
+        "max_size_mb": 8192, "crf": 20, "maxrate": None, "bufsize": None,
+        "vertical": False, "note": "H.264 + AAC，1080p",
+    },
+}
+
+VIDEO_DIR = APP_DIR / "video-work"
+VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_HISTORY = APP_DIR / "video_history.json"
+VIDEO_JOBS = {}
+VIDEO_LOCK = threading.Lock()
+
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 _ENV_CACHE = {"ts": 0.0, "data": None}
@@ -1237,6 +1290,276 @@ def start_publish_adjust(job, api_key, platforms, instruction):
     return True
 
 
+# ---------------------------------------------------------------- 视频规格 / 优化
+def add_video_log(job, line):
+    line = ANSI_RE.sub("", str(line)).rstrip()
+    if not line:
+        return
+    job["logs"].append(line)
+    if len(job["logs"]) > 200:
+        job["logs"] = job["logs"][-200:]
+
+
+def _has_faststart(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(2 * 1024 * 1024)
+        moov = head.find(b"moov")
+        mdat = head.find(b"mdat")
+        return moov != -1 and (mdat == -1 or moov < mdat)
+    except OSError:
+        return False
+
+
+def probe_video(path):
+    cmd = ["ffprobe", "-v", "error", "-print_format", "json",
+           "-show_format", "-show_streams", str(path)]
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                         creationflags=CREATE_NO_WINDOW).stdout
+    data = json.loads(out or "{}")
+    fmt = data.get("format", {})
+    streams = data.get("streams", [])
+    vs = next((s for s in streams if s.get("codec_type") == "video"), {})
+    aus = next((s for s in streams if s.get("codec_type") == "audio"), {})
+
+    def rate(s):
+        try:
+            n, d = str(s).split("/")
+            return float(n) / float(d) if float(d) else 0.0
+        except Exception:
+            return 0.0
+
+    avg = rate(vs.get("avg_frame_rate", "0/0"))
+    r = rate(vs.get("r_frame_rate", "0/0"))
+    fps = avg or r
+    suffix = Path(path).suffix.lower().lstrip(".")
+    fmt_name = fmt.get("format_name") or ""
+    if suffix in ("mp4", "m4v"):
+        container = "mp4"
+    elif suffix == "mov":
+        container = "mov"
+    elif suffix == "flv":
+        container = "flv"
+    elif suffix in ("mkv", "webm"):
+        container = "matroska"
+    else:
+        container = fmt_name.split(",")[0]
+    return {
+        "format": container,
+        "ext": suffix,
+        "format_long": fmt.get("format_long_name", ""),
+        "duration": float(fmt.get("duration") or 0),
+        "size": int(fmt.get("size") or 0),
+        "bitrate": int(fmt.get("bit_rate") or 0),
+        "vcodec": vs.get("codec_name", ""),
+        "profile": vs.get("profile", ""),
+        "width": int(vs.get("width") or 0),
+        "height": int(vs.get("height") or 0),
+        "fps": round(fps, 2),
+        "r_fps": round(r, 2),
+        "vfr": bool(avg and r and abs(avg - r) > 0.5),
+        "pix_fmt": vs.get("pix_fmt", ""),
+        "has_audio": bool(aus),
+        "acodec": aus.get("codec_name", ""),
+        "sample_rate": int(aus.get("sample_rate") or 0),
+        "channels": int(aus.get("channels") or 0),
+        "faststart": _has_faststart(path),
+    }
+
+
+def check_video_spec(info, platform):
+    spec = PLATFORM_VIDEO_SPECS[platform]
+    issues = []
+    if info["format"] not in spec["container"]:
+        issues.append(f'容器 {info["format"]} 不符合（需 {", ".join(spec["container"])}）')
+    if info["vcodec"] not in spec["vcodec"]:
+        issues.append(f'视频编码 {info["vcodec"]} 不符合（需 {", ".join(spec["vcodec"])}）')
+    if info["has_audio"] and info["acodec"] not in spec["acodec"]:
+        issues.append(f'音频编码 {info["acodec"]} 不符合（需 {", ".join(spec["acodec"])}）')
+    if info["width"] > spec["max_w"] or info["height"] > spec["max_h"]:
+        issues.append(f'分辨率 {info["width"]}×{info["height"]} 超过 {spec["max_w"]}×{spec["max_h"]}')
+    if info["fps"] > spec["max_fps"] + 0.5:
+        issues.append(f'帧率 {info["fps"]}fps 超过 {spec["max_fps"]}fps')
+    if spec["max_duration"] and info["duration"] > spec["max_duration"]:
+        issues.append(f'时长 {int(info["duration"])}s 超过 {spec["max_duration"]}s')
+    if info["size"] / 1048576 > spec["max_size_mb"]:
+        issues.append(f'文件 {info["size"] / 1048576:.0f}MB 超过 {spec["max_size_mb"]}MB')
+    if spec.get("min_h") and info["height"] < spec["min_h"]:
+        issues.append(f'分辨率偏低（{info["width"]}×{info["height"]}），建议至少 {spec["min_h"]}p，否则平台转码容易失败')
+    if spec.get("min_bitrate") and info["bitrate"] < spec["min_bitrate"]:
+        issues.append(f'码率偏低（{info["bitrate"] / 1000:.0f} kbps），建议 ≥{spec["min_bitrate"] // 1000} kbps')
+    if platform == "reddit" and info.get("ext") == "mov":
+        issues.append("MOV 容器在 Reddit 上更容易处理失败，建议转成 MP4")
+    if info["pix_fmt"] not in ("yuv420p", "yuvj420p"):
+        issues.append(f'像素格式 {info["pix_fmt"]} 不是 8-bit 4:2:0（Reddit 等平台常因此失败）')
+    if info["vfr"]:
+        issues.append(f'可变帧率（avg {info["fps"]} vs r {info["r_fps"]}），建议转成恒定帧率')
+    if not info["faststart"]:
+        issues.append("未启用 faststart（moov 不在文件头），部分平台会处理失败")
+    return {"platform": platform, "label": spec["label"], "ok": not issues,
+            "issues": issues, "note": spec["note"]}
+
+
+def build_ffmpeg_cmd(src, dst, platform, info):
+    spec = PLATFORM_VIDEO_SPECS[platform]
+    w = info["width"] or 1920
+    h = info["height"] or 1080
+    vf = []
+    if spec.get("vertical"):
+        vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"]
+    else:
+        target_w, target_h = w, h
+        scale = min(spec["max_w"] / w, spec["max_h"] / h, 1.0)
+        if scale < 1.0:
+            target_w = max(2, int(w * scale) // 2 * 2)
+            target_h = max(2, int(h * scale) // 2 * 2)
+        min_h = spec.get("min_h", 0)
+        if min_h and target_h < min_h:
+            target_h = min_h
+            target_w = max(2, int(w * (min_h / h)) // 2 * 2)
+            if target_w > spec["max_w"]:
+                target_w = spec["max_w"] // 2 * 2
+        if (target_w, target_h) != (w, h):
+            vf.append(f"scale={target_w}:{target_h}")
+    vf.append(f"fps={spec['max_fps']}")
+    vf.append("format=yuv420p")
+
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-vf", ",".join(vf),
+           "-c:v", "libx264", "-profile:v", "high", "-level", "4.1",
+           "-preset", "medium", "-crf", str(spec["crf"])]
+    if spec.get("maxrate"):
+        cmd += ["-maxrate", spec["maxrate"], "-bufsize", spec["bufsize"]]
+    cmd += ["-fps_mode", "cfr"]
+    if info.get("has_audio"):
+        cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
+    else:
+        cmd += ["-an"]
+    cmd += ["-movflags", "+faststart", "-f", "mp4", str(dst)]
+    return cmd
+
+
+def new_video_job(name):
+    jid = now_str() + "_" + os.urandom(3).hex()
+    d = VIDEO_DIR / jid
+    d.mkdir(parents=True, exist_ok=True)
+    job = {
+        "id": jid, "name": name, "path": None, "size": 0, "dir": d,
+        "state": "uploading", "message": "正在上传…", "progress": 0,
+        "info": None, "checks": None, "output": None, "created": time.time(),
+        "proc": None, "logs": [], "error": None,
+    }
+    with VIDEO_LOCK:
+        VIDEO_JOBS[jid] = job
+    return job
+
+
+def run_optimize(job, platform):
+    try:
+        info = job["info"]
+        job["state"] = "optimizing"
+        job["progress"] = 0
+        job["message"] = "准备编码…"
+        job["output"] = None
+        job["error"] = None
+        out_dir = job["dir"] / "optimized"
+        out_dir.mkdir(exist_ok=True)
+        base = os.path.splitext(job["name"])[0]
+        out = out_dir / f"{base}_{platform}.mp4"
+        cmd = build_ffmpeg_cmd(job["path"], out, platform, info)
+        add_video_log(job, "$ " + " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                text=True, bufsize=1, creationflags=CREATE_NO_WINDOW)
+        job["proc"] = proc
+        dur = info.get("duration") or 0
+        for line in proc.stderr:
+            m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
+            if m and dur > 0:
+                secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                job["progress"] = min(99, int(secs / dur * 100))
+                job["message"] = f"编码中… {job['progress']}%"
+            if len(line) < 200:
+                add_video_log(job, line.strip())
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg 退出码 {rc}")
+        job["output"] = str(out)
+        job["state"] = "done"
+        job["progress"] = 100
+        job["message"] = "优化完成"
+        persist_video_history()
+    except Exception as e:  # noqa: BLE001
+        job["state"] = "error"
+        job["message"] = "失败：" + str(e)
+        job["error"] = str(e)
+        add_video_log(job, "ERROR: " + str(e))
+    finally:
+        job["proc"] = None
+
+
+def start_optimize(job, platform):
+    if job.get("state") == "optimizing":
+        return False
+    job["state"] = "optimizing"
+    job["progress"] = 0
+    job["message"] = "准备编码…"
+    threading.Thread(target=run_optimize, args=(job, platform), daemon=True).start()
+    return True
+
+
+def video_job_public(job):
+    return {
+        "id": job["id"], "name": job["name"], "size": job.get("size", 0),
+        "state": job["state"], "message": job.get("message", ""),
+        "progress": job.get("progress", 0), "info": job.get("info"),
+        "checks": job.get("checks"),
+        "outputReady": bool(job.get("output") and Path(job["output"]).exists()),
+        "created": job.get("created"), "logs": job.get("logs", [])[-40:],
+    }
+
+
+def persist_video_history():
+    with VIDEO_LOCK:
+        recs = sorted(VIDEO_JOBS.values(), key=lambda x: x.get("created") or 0, reverse=True)[:30]
+        data = [{
+            "id": j["id"], "name": j["name"], "size": j.get("size", 0),
+            "state": j["state"], "output": j.get("output"), "created": j.get("created"),
+            "info": j.get("info"), "checks": j.get("checks"),
+            "dir": str(j["dir"]), "message": j.get("message", ""),
+        } for j in recs]
+    tmp = VIDEO_HISTORY.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, VIDEO_HISTORY)
+    except OSError:
+        pass
+
+
+def load_video_history():
+    if not VIDEO_HISTORY.exists():
+        return
+    try:
+        recs = json.loads(VIDEO_HISTORY.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    for r in recs:
+        jid = r.get("id")
+        if not jid:
+            continue
+        state = r.get("state", "done")
+        if state in ("uploading", "optimizing"):
+            state = "error"
+        VIDEO_JOBS[jid] = {
+            "id": jid, "name": r.get("name", "video"), "path": None,
+            "size": r.get("size", 0), "dir": Path(r.get("dir") or (VIDEO_DIR / jid)),
+            "state": state, "message": r.get("message", ""),
+            "progress": 100 if state == "done" else 0,
+            "info": r.get("info"), "checks": r.get("checks"),
+            "output": r.get("output"), "created": r.get("created") or time.time(),
+            "proc": None, "logs": [], "error": None,
+        }
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "SubtitleApp/2.0"
@@ -1305,6 +1628,31 @@ class Handler(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 jobs = sorted(JOBS.values(), key=lambda j: j.get("created") or 0, reverse=True)
             return self.send_json(200, {"jobs": [job_public(j) for j in jobs]})
+        if path == "/api/video/jobs":
+            with VIDEO_LOCK:
+                jobs = sorted(VIDEO_JOBS.values(), key=lambda j: j.get("created") or 0, reverse=True)[:20]
+            return self.send_json(200, {"jobs": [video_job_public(j) for j in jobs]})
+        if path == "/api/video/status":
+            job = VIDEO_JOBS.get((qs.get("job") or [""])[0])
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            return self.send_json(200, video_job_public(job))
+        if path == "/api/video/download":
+            job = VIDEO_JOBS.get((qs.get("job") or [""])[0])
+            if not job or not job.get("output") or not Path(job["output"]).exists():
+                return self.send_json(404, {"error": "优化视频尚未生成"})
+            out = Path(job["output"])
+            return self.send_file_download(out, out.name)
+        if path == "/api/video/open":
+            job = VIDEO_JOBS.get((qs.get("job") or [""])[0])
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            folder = Path(job["output"]).parent if job.get("output") else job["dir"]
+            try:
+                os.startfile(str(folder))  # noqa: S606
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(500, {"error": str(e)})
+            return self.send_json(200, {"ok": True})
         if path == "/api/env":
             force = (qs.get("refresh") or ["0"])[0] in ("1", "true")
             env = check_env(force=force)
@@ -1352,6 +1700,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/upload":
             return self.handle_upload(qs)
+        if path == "/api/video/upload":
+            return self.handle_video_upload(qs)
 
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
@@ -1510,6 +1860,18 @@ class Handler(BaseHTTPRequestHandler):
             ok = start_publish_adjust(job, key, plats, instruction)
             return self.send_json(200, {"ok": ok})
 
+        if path == "/api/video/optimize":
+            job = VIDEO_JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            platform = data.get("platform", "reddit")
+            if platform not in PLATFORM_VIDEO_SPECS:
+                return self.send_json(400, {"error": "平台无效"})
+            if not job.get("info"):
+                return self.send_json(400, {"error": "视频尚未分析完成"})
+            ok = start_optimize(job, platform)
+            return self.send_json(200, {"ok": ok})
+
         if path == "/api/cleanup":
             removed = 0
             for jid, job in list(JOBS.items()):
@@ -1557,6 +1919,55 @@ class Handler(BaseHTTPRequestHandler):
         set_state(job, "uploaded", "上传完成，准备开始…", 0)
         return self.send_json(200, {"jobId": job["id"], "name": name, "size": length})
 
+    def handle_video_upload(self, qs):
+        name = safe_name((qs.get("name") or ["video.mp4"])[0])
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return self.send_json(400, {"error": "空文件"})
+
+        job = new_video_job(name)
+        dest = job["dir"] / name
+        job["size"] = length
+        remaining = length
+        try:
+            with open(dest, "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+        except Exception as e:  # noqa: BLE001
+            job["state"] = "error"
+            job["message"] = "上传失败：" + str(e)
+            return self.send_json(500, {"error": str(e)})
+
+        if remaining > 0:
+            job["state"] = "error"
+            job["message"] = "上传中断"
+            return self.send_json(400, {"error": "上传中断"})
+
+        job["path"] = str(dest)
+        try:
+            info = probe_video(dest)
+            job["info"] = info
+            job["checks"] = {p: check_video_spec(info, p) for p in PLATFORM_VIDEO_SPECS}
+            job["state"] = "ready"
+            job["message"] = "已分析完成，选择平台后可优化"
+        except Exception as e:  # noqa: BLE001
+            job["state"] = "error"
+            job["message"] = "分析失败：" + str(e)
+            return self.send_json(500, {"error": str(e)})
+
+        persist_video_history()
+        return self.send_json(200, {
+            "jobId": job["id"], "name": name, "size": length,
+            "info": info, "checks": job["checks"],
+        })
+
 
 # ---------------------------------------------------------------- 启动
 def pick_port():
@@ -1595,6 +2006,7 @@ def main():
     kill_orphan_workers()
     cleanup_old_work()
     load_history()
+    load_video_history()
     port = pick_port()
     server = ThreadingHTTPServer((HOST, port), Handler)
     server.daemon_threads = True

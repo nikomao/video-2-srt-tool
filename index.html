@@ -120,6 +120,9 @@
   .quick select{background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:7px 10px;font:inherit;font-size:13px;min-width:155px}
   .envchips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
   .boxhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .specgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+  .specitem{background:#0c1220;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:12px;color:var(--muted)}
+  .specitem b{display:block;color:var(--text);font-size:13px;margin-top:3px;word-break:break-all}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
   .modal.hidden{display:none!important}
   .modal-box{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:20px;max-width:580px;width:100%;max-height:90vh;overflow:auto}
@@ -171,8 +174,9 @@
         <input type="file" id="homeFileInput" multiple accept="video/*,.mkv,.ts,.m2ts,.rmvb" />
       </div>
       <div class="envchips" id="homeEnv"></div>
-      <div style="margin-top:14px">
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="ghost small" data-goto="1">环境检查 / 高级设置（向导）</button>
+        <button class="ghost small" data-goto="8">🎞 平台视频规格检查</button>
       </div>
     </div>
 
@@ -320,6 +324,35 @@
     </div>
   </section>
 
+  <!-- 8 平台适配 -->
+  <section class="panel" data-step="8">
+    <div class="box">
+      <h2>⑧ 平台视频规格检查与优化</h2>
+      <div class="desc">上传剪辑完成的成片，检查编码 / 分辨率 / 帧率 / 音频是否符合各平台要求，并一键转码成可上传的 MP4。重点解决 Reddit 处理失败（VFR、10-bit、4:2:2、非 AAC 等）。</div>
+      <div class="dropzone" id="videoDrop">
+        <div class="icon">🎞️</div>
+        <div class="big">把最终成片拖到这里，或点击选择</div>
+        <div class="hint">mp4 / mov / mkv / avi / webm…（单文件）</div>
+        <input type="file" id="videoInput" accept="video/*,.mkv,.mov,.avi,.webm" />
+      </div>
+      <div id="videoInfo" style="margin-top:16px"></div>
+      <div id="videoChecks" style="margin-top:14px;display:flex;flex-direction:column;gap:10px"></div>
+      <div id="videoOptimizeBox" style="margin-top:16px;display:none">
+        <div class="field">
+          <select id="videoPlatform" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
+          <button class="primary" id="videoOptimizeBtn">优化并生成</button>
+        </div>
+        <div class="msg" id="videoMsg"></div>
+        <div class="bar" id="videoBar"><i></i></div>
+        <div class="row" id="videoActions"></div>
+      </div>
+      <div class="nav">
+        <button class="ghost" data-goto="0">回首页</button>
+        <button class="ghost" data-goto="7">历史记录</button>
+      </div>
+    </div>
+  </section>
+
   <footer>
     本地运行 · 视频不会上传到互联网 · 输出位于 D:\Codes\subtitle-webapp\work\&lt;任务&gt;\
   </footer>
@@ -342,7 +375,7 @@
 
 <script>
 const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
-const STEP_NAMES = ['首页','环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕','历史记录'];
+const STEP_NAMES = ['首页','环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕','历史记录','平台适配'];
 
 const S = {
   step: 1,
@@ -980,10 +1013,118 @@ $('#clearHistoryBtn').onclick=async()=>{
   loadHistory();
 };
 
+/* ---------------- 8 平台视频规格检查与优化 ---------------- */
+let vJob=null, vTimer=null;
+function fmtDur(s){ s=Math.round(s||0); const m=Math.floor(s/60), sec=s%60; return `${m}:${String(sec).padStart(2,'0')}`; }
+function initVideoPanel(){
+  const drop=$('#videoDrop'), input=$('#videoInput');
+  if(!drop||!input) return;
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) uploadFinalVideo(e.dataTransfer.files[0]); });
+  drop.addEventListener('click',()=>input.click());
+  input.addEventListener('change',e=>{ if(e.target.files[0]) uploadFinalVideo(e.target.files[0]); input.value=''; });
+  const sel=$('#videoPlatform');
+  sel.innerHTML=Object.entries(PLATFORM_NAMES).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('');
+  sel.value='reddit';
+  $('#videoOptimizeBtn').onclick=optimizeVideo;
+}
+function uploadFinalVideo(file){
+  vJob=null;
+  if(vTimer){ clearTimeout(vTimer); vTimer=null; }
+  $('#videoInfo').innerHTML='<div class="empty">正在上传并分析…</div>';
+  $('#videoChecks').innerHTML='';
+  $('#videoOptimizeBox').style.display='none';
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/video/upload?name='+encodeURIComponent(file.name));
+  xhr.upload.onprogress=e=>{ if(e.lengthComputable) $('#videoInfo').innerHTML=`<div class="empty">上传中… ${Math.round(e.loaded/e.total*100)}%</div>`; };
+  xhr.onload=()=>{
+    if(xhr.status>=200&&xhr.status<300){
+      const res=JSON.parse(xhr.responseText);
+      vJob=res;
+      renderVideoInfo(res.info);
+      renderVideoChecks(res.checks);
+      $('#videoOptimizeBox').style.display='block';
+      $('#videoMsg').textContent='选择平台后点「优化并生成」';
+      $('#videoBar').className='bar'; $('#videoBar>i').style.width='0%';
+      $('#videoActions').innerHTML='';
+      $('#videoOptimizeBox').scrollIntoView({behavior:'smooth',block:'nearest'});
+    } else {
+      let msg='上传失败'; try{msg=JSON.parse(xhr.responseText).error||msg;}catch(e){}
+      $('#videoInfo').innerHTML=`<div class="empty" style="color:var(--err)">${esc(msg)}</div>`;
+    }
+  };
+  xhr.onerror=()=>{ $('#videoInfo').innerHTML='<div class="empty" style="color:var(--err)">上传失败：网络错误</div>'; };
+  xhr.send(file);
+}
+function renderVideoInfo(info){
+  if(!info) return;
+  const items=[
+    ['容器', info.format],
+    ['视频编码', `${info.vcodec} ${info.profile||''}`],
+    ['分辨率', `${info.width}×${info.height}`],
+    ['帧率', `${info.fps} fps${info.vfr?' (VFR)':''}`],
+    ['像素格式', info.pix_fmt],
+    ['音频', info.has_audio?`${info.acodec} ${info.sample_rate}Hz ${info.channels}ch`:'无'],
+    ['时长', fmtDur(info.duration)],
+    ['大小', fmtSize(info.size)],
+    ['码率', `${(info.bitrate/1e6).toFixed(1)} Mbps`],
+    ['faststart', info.faststart?'是':'否'],
+  ];
+  $('#videoInfo').innerHTML='<div class="specgrid">'+items.map(([k,v])=>`<div class="specitem">${k}<b>${esc(v)}</b></div>`).join('')+'</div>';
+}
+function renderVideoChecks(checks){
+  if(!checks) return;
+  const el=$('#videoChecks'); el.innerHTML='';
+  for(const c of Object.values(checks)){
+    const card=document.createElement('div'); card.className='card'; card.style.padding='12px 14px';
+    card.innerHTML=`<div class="card-head"><div><div class="name" style="font-size:13.5px">${esc(c.label)}</div>
+      <div class="meta">${esc(c.note)}</div></div>
+      <div class="pill ${c.ok?'done':'error'}">${c.ok?'符合':'需优化'}</div></div>
+      ${c.issues.length?`<div class="msg" style="color:#ffb4b4">${c.issues.map(esc).join('<br>')}</div>`:''}`;
+    el.appendChild(card);
+  }
+}
+async function optimizeVideo(){
+  if(!vJob){ alert('请先上传视频'); return; }
+  const platform=$('#videoPlatform').value;
+  try{
+    await api('/api/video/optimize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:vJob.jobId,platform})});
+    $('#videoMsg').textContent='已开始优化…';
+    $('#videoBar').className='bar running'; $('#videoBar>i').style.width='3%';
+    $('#videoActions').innerHTML='';
+    pollVideo();
+  }catch(e){ alert('无法优化：'+e.message); }
+}
+async function pollVideo(){
+  if(!vJob) return;
+  try{
+    const s=await api('/api/video/status?job='+encodeURIComponent(vJob.jobId));
+    $('#videoMsg').textContent=s.message||'';
+    $('#videoBar').className='bar '+(s.state==='done'?'done':s.state==='error'?'error':'running');
+    $('#videoBar>i').style.width=Math.max(3,Math.min(100,s.progress||0))+'%';
+    if(s.state==='done'){
+      $('#videoActions').innerHTML='';
+      const a=document.createElement('a');
+      a.href='/api/video/download?job='+encodeURIComponent(vJob.jobId);
+      a.style.cssText='display:inline-block;padding:8px 14px;border:1px solid rgba(52,211,153,.4);border-radius:9px;color:#9af0cd;text-decoration:none;font-size:13px';
+      a.textContent='⬇ 下载优化后的视频';
+      $('#videoActions').appendChild(a);
+      const b=document.createElement('button'); b.className='small'; b.textContent='📂 文件夹';
+      b.onclick=()=>fetch('/api/video/open?job='+encodeURIComponent(vJob.jobId));
+      $('#videoActions').appendChild(b);
+      return;
+    }
+    if(s.state==='error'){ alert('优化失败：'+(s.message||'')); return; }
+    vTimer=setTimeout(pollVideo,1500);
+  }catch(e){ vTimer=setTimeout(pollVideo,2500); }
+}
+
 /* ---------------- 初始化 ---------------- */
 buildStepper();
 initLang();
 initHome();
+initVideoPanel();
 const hwEl=$('#hotwordsInput');
 if(hwEl){ hwEl.value=S.hotwords; hwEl.oninput=()=>{S.hotwords=hwEl.value;localStorage.setItem('hotwords',hwEl.value);}; }
 document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x.dataset.pref===S.preference));
