@@ -29,15 +29,17 @@
   button.dl:hover{background:rgba(52,211,153,.2)}
   button.danger{background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.35);color:#ffb4b4}
 
-  .stepper{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;margin:6px 0 20px;padding-bottom:6px}
-  .stp{flex:0 0 auto;min-width:108px;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:9px 10px;cursor:pointer;transition:.16s;position:relative}
-  .stp .t{white-space:nowrap}
-  .stp:hover{border-color:var(--accent)}
-  .stp .n{font-size:11px;color:var(--muted)}
-  .stp .t{font-size:12.5px;margin-top:3px;font-weight:600}
-  .stp.active{border-color:var(--accent);background:linear-gradient(180deg,rgba(109,139,255,.16),rgba(139,92,246,.08))}
+  .stepper{display:flex;gap:4px;flex-wrap:wrap;margin:2px 0 18px;overflow:visible}
+  .stp{flex:1 1 78px;min-width:0;border:1px solid transparent;background:transparent;border-radius:9px;padding:7px 5px 6px;cursor:pointer;transition:.16s;position:relative;text-align:center}
+  .stp:hover{background:rgba(109,139,255,.08);border-color:rgba(109,139,255,.25)}
+  .stp .n{font-size:9.5px;color:var(--muted);line-height:1;margin-bottom:4px;letter-spacing:.5px}
+  .stp .t{font-size:11.5px;color:var(--muted);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stp.active{background:linear-gradient(135deg,rgba(109,139,255,.18),rgba(139,92,246,.1));border-color:rgba(109,139,255,.45)}
+  .stp.active .t{color:#fff}
+  .stp.active .n{color:var(--accent)}
   .stp.done .n{color:var(--ok)}
-  .stp.done:after{content:"✓";position:absolute;right:9px;top:8px;color:var(--ok);font-size:12px}
+  .stp.done .t{color:#9fb0c8}
+  .stp.done:after{content:"✓";position:absolute;top:3px;right:5px;color:var(--ok);font-size:10px;line-height:1}
 
   .panel{display:none;animation:in .2s ease}
   .panel.active{display:block}
@@ -94,6 +96,7 @@
   .pill.transcribing,.pill.translating{color:#e9d5ff;background:rgba(139,92,246,.16);border-color:rgba(139,92,246,.35)}
   .pill.done{color:#9af0cd;background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.35)}
   .pill.error{color:#ffb4b4;background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.35)}
+  .pill.warn{color:#f5d78a;background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.35)}
   .bar{height:8px;background:#0e1420;border-radius:999px;overflow:hidden;margin-top:13px}
   .bar>i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .35s}
   .bar.done>i{background:linear-gradient(90deg,#34d399,#10b981)}
@@ -342,6 +345,13 @@
           <select id="videoPlatform" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
           <button class="primary" id="videoOptimizeBtn">优化并生成</button>
         </div>
+        <div class="field" style="margin-top:8px">
+          <select id="videoMode" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit">
+            <option value="auto">自动（推荐：能无损封装就不重编码）</option>
+            <option value="remux">无损封装（不重编码，画质零损失）</option>
+            <option value="encode">重新编码（修改编码/分辨率/帧率）</option>
+          </select>
+        </div>
         <div class="msg" id="videoMsg"></div>
         <div class="bar" id="videoBar"><i></i></div>
         <div class="row" id="videoActions"></div>
@@ -375,7 +385,7 @@
 
 <script>
 const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
-const STEP_NAMES = ['首页','环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕','历史记录','平台适配'];
+const STEP_NAMES = ['首页','环境','视频语言','字幕语言','模型','生成','校对','历史','平台适配'];
 
 const S = {
   step: 1,
@@ -418,7 +428,7 @@ function buildStepper(){
   for (let i=0;i<STEP_NAMES.length;i++){
     const d=document.createElement('div');
     d.className='stp'; d.dataset.step=i;
-    d.innerHTML=`<div class="n">${i===0?'HOME':'STEP '+i}</div><div class="t">${STEP_NAMES[i]}</div>`;
+    d.innerHTML=`<div class="n">${i===0?'HOME':String(i).padStart(2,'0')}</div><div class="t">${STEP_NAMES[i]}</div>`;
     d.onclick=()=>go(i);
     stepperEl.appendChild(d);
   }
@@ -842,7 +852,6 @@ function renderHomeHistory(){ renderCompactHistory($('#homeHistory'),6); }
 
 /* ---------------- 首页 ---------------- */
 const MODEL_OPTS=[
-  {value:'kotoba-v2.0',label:'Kotoba v2.0 · 日语专用（推荐）'},
   {value:'large-v3',label:'large-v3 · 多语言最佳'},
   {value:'medium',label:'medium · 均衡'},
   {value:'small',label:'small · 快速'},
@@ -1043,7 +1052,7 @@ function uploadFinalVideo(file){
       const res=JSON.parse(xhr.responseText);
       vJob=res;
       renderVideoInfo(res.info);
-      renderVideoChecks(res.checks);
+      renderVideoChecks(res.checks, res.diagnose || {});
       $('#videoOptimizeBox').style.display='block';
       $('#videoMsg').textContent='选择平台后点「优化并生成」';
       $('#videoBar').className='bar'; $('#videoBar>i').style.width='0%';
@@ -1063,7 +1072,7 @@ function renderVideoInfo(info){
     ['容器', info.format],
     ['视频编码', `${info.vcodec} ${info.profile||''}`],
     ['分辨率', `${info.width}×${info.height}`],
-    ['帧率', `${info.fps} fps${info.vfr?' (VFR)':''}`],
+    ['帧率', `${info.fps} fps（r=${info.r_fps}）${info.vfr?' · VFR':''}`],
     ['像素格式', info.pix_fmt],
     ['音频', info.has_audio?`${info.acodec} ${info.sample_rate}Hz ${info.channels}ch`:'无'],
     ['时长', fmtDur(info.duration)],
@@ -1073,23 +1082,64 @@ function renderVideoInfo(info){
   ];
   $('#videoInfo').innerHTML='<div class="specgrid">'+items.map(([k,v])=>`<div class="specitem">${k}<b>${esc(v)}</b></div>`).join('')+'</div>';
 }
-function renderVideoChecks(checks){
+function renderVideoChecks(checks, diagnoses){
   if(!checks) return;
   const el=$('#videoChecks'); el.innerHTML='';
   for(const c of Object.values(checks)){
+    const d=(diagnoses||{})[c.platform];
+    const fix=c.fix||(c.ok?'none':'encode');
+    const pillClass=c.ok?'done':(fix==='remux'?'warn':'error');
+    const pillLabel=c.ok?'✅ 符合':(fix==='remux'?'🔧 需无损封装':'❌ 需转码');
+    const fixLabel=c.ok?'无需处理':(fix==='remux'?'无损封装（-c copy，画质零损失）':'重新编码');
     const card=document.createElement('div'); card.className='card'; card.style.padding='12px 14px';
-    card.innerHTML=`<div class="card-head"><div><div class="name" style="font-size:13.5px">${esc(c.label)}</div>
+    let html=`<div class="card-head"><div><div class="name" style="font-size:13.5px">${esc(c.label)}</div>
       <div class="meta">${esc(c.note)}</div></div>
-      <div class="pill ${c.ok?'done':'error'}">${c.ok?'符合':'需优化'}</div></div>
-      ${c.issues.length?`<div class="msg" style="color:#ffb4b4">${c.issues.map(esc).join('<br>')}</div>`:''}`;
+      <div class="pill ${pillClass}">${pillLabel}</div></div>`;
+    html+=`<div class="meta" style="margin-top:7px">建议处理：<b style="color:var(--text)">${fixLabel}</b></div>`;
+    if(c.issues.length) html+=`<div class="msg" style="color:#ffb4b4">${c.issues.map(esc).join('<br>')}</div>`;
+    if(d){
+      html+=`<div class="report"><h4>DeepSeek 检查：${d.ok?'✅ 符合':'❌ 需优化'}</h4>
+        ${d.issues&&d.issues.length?`<div class="notes">问题：${esc(d.issues.join('；'))}</div>`:''}
+        ${d.recommendations&&d.recommendations.length?`<div class="notes">建议：${esc(d.recommendations.join('；'))}</div>`:''}
+        ${d.ffmpeg_args?`<div class="notes">推荐参数：<code>${esc(d.ffmpeg_args)}</code></div>`:''}
+      </div>`;
+    }
+    html+='<div class="row"></div>';
+    card.innerHTML=html;
+    const row=card.querySelector('.row');
+    const b=document.createElement('button');
+    b.className='small'; b.textContent='🤖 DeepSeek 深度检查';
+    b.onclick=()=>diagnoseVideo(c.platform);
+    row.appendChild(b);
     el.appendChild(card);
   }
+}
+async function diagnoseVideo(platform){
+  if(!vJob) return;
+  try{
+    await api('/api/video/diagnose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:vJob.jobId,platform})});
+    pollVideoDiagnose(platform);
+  }catch(e){
+    alert('无法检查：'+e.message+'\n\n请先在「④ 推荐模型」填写 DeepSeek API Key。');
+  }
+}
+async function pollVideoDiagnose(platform){
+  if(!vJob) return;
+  try{
+    const s=await api('/api/video/status?job='+encodeURIComponent(vJob.jobId));
+    if(s.diagnoseState==='running'){ setTimeout(()=>pollVideoDiagnose(platform),1500); return; }
+    vJob.diagnose=s.diagnose||{};
+    vJob.checks=s.checks||vJob.checks;
+    renderVideoChecks(vJob.checks, vJob.diagnose);
+    if(s.diagnoseState==='error') alert('DeepSeek 检查失败：'+(s.diagnoseMessage||''));
+  }catch(e){ setTimeout(()=>pollVideoDiagnose(platform),2000); }
 }
 async function optimizeVideo(){
   if(!vJob){ alert('请先上传视频'); return; }
   const platform=$('#videoPlatform').value;
   try{
-    await api('/api/video/optimize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:vJob.jobId,platform})});
+    const mode=$('#videoMode').value;
+    await api('/api/video/optimize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:vJob.jobId,platform,mode})});
     $('#videoMsg').textContent='已开始优化…';
     $('#videoBar').className='bar running'; $('#videoBar>i').style.width='3%';
     $('#videoActions').innerHTML='';

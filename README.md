@@ -32,7 +32,14 @@
 - 时长 / 文件大小 / 码率 / faststart
 - 可变帧率（VFR）
 
-并按平台规格给出「符合 / 需优化」和具体问题。点「优化并生成」会用 ffmpeg 转成符合规格的 MP4：
+并按平台规格给出「✅ 符合 / 🔧 需无损封装 / ❌ 需转码」和具体问题。不符合时可以点「🤖 DeepSeek 深度检查」，让 DeepSeek 根据 ffprobe 信息给出问题、修复建议和 ffmpeg 参数。
+
+点「优化并生成」会自动判断：
+
+- **无损封装**：编码/分辨率/帧率/音频已合规，只做 `-c copy -movflags +faststart -avoid_negative_ts make_zero`，画质零损失、秒级完成
+- **重新编码**：需要改编码/分辨率/帧率/像素格式时先转码，**最后再做一次无损封装**
+
+具体规格：
 
 - **Reddit**：H.264 High + AAC 48kHz + yuv420p + 恒定帧率 + faststart，≤1080p / ≤15 分钟 / ≤1GB；分辨率低于 720p 会自动升到 720p（解决 Reddit 上传处理失败）
 - **TikTok / Instagram Reels**：竖屏 1080×1920（等比缩放 + 黑边）

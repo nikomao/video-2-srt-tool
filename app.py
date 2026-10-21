@@ -79,7 +79,6 @@ LANGUAGES = {
 }
 
 MODELS = {
-    "kotoba-v2.0": {"label": "Kotoba v2.0 · 日语专用（推荐）", "vram": 4000},
     "large-v3":    {"label": "large-v3 · 多语言最佳",          "vram": 5000},
     "medium":      {"label": "medium · 均衡",                  "vram": 2500},
     "small":       {"label": "small · 快速",                    "vram": 1500},
@@ -368,10 +367,6 @@ def recommend_model(pref="balanced", source="auto"):
     if device == "cpu" and pref != "quality" and model == "large-v3":
         model = "medium"
 
-    # 日语内容优先日语专用模型
-    if source == "ja" and pref in ("quality", "balanced"):
-        model = "kotoba-v2.0"
-
     need = MODELS[model]["vram"]
     if vram and vram < need:
         for m in ("medium", "small", "base"):
@@ -388,7 +383,7 @@ def recommend_model(pref="balanced", source="auto"):
                "speed": " 已按“速度优先”选择模型。",
                "balanced": " 已按“均衡”选择模型。"}.get(pref, "")
     if source == "ja":
-        reason += " 日语内容优先使用 Kotoba-Whisper v2.0（日语专用微调）。"
+        reason += " 建议在「专有名词/角色名」里填写作品名与角色名，可显著减少同音词错误。"
 
     return {
         "model": model,
@@ -800,10 +795,6 @@ def run_job(job):
         params = job["params"]
         job["exe"] = ensure_tool(job)
         seed_model(job, params["model"])
-        if params["model"] == "kotoba-v2.0":
-            kt = MODEL_DIR / "faster-whisper-kotoba-v2.0"
-            if not (kt / "model.bin").exists():
-                raise RuntimeError("Kotoba 日语模型尚未下载完成，请稍后重试，或先切回 large-v3")
 
         video = Path(job["path"])
         # 用纯 ASCII 文件名跑工具：避免全角/日文/空格文件名导致工具写 SRT 时崩溃
@@ -1396,8 +1387,26 @@ def check_video_spec(info, platform):
         issues.append(f'可变帧率（avg {info["fps"]} vs r {info["r_fps"]}），建议转成恒定帧率')
     if not info["faststart"]:
         issues.append("未启用 faststart（moov 不在文件头），部分平台会处理失败")
+    remux_only = (
+        info["vcodec"] in spec["vcodec"]
+        and (not info["has_audio"] or info["acodec"] in spec["acodec"])
+        and info["pix_fmt"] in ("yuv420p", "yuvj420p")
+        and info["width"] <= spec["max_w"] and info["height"] <= spec["max_h"]
+        and (not spec.get("min_h") or info["height"] >= spec["min_h"])
+        and info["fps"] <= spec["max_fps"] + 0.5
+        and not info["vfr"]
+        and (not spec["max_duration"] or info["duration"] <= spec["max_duration"])
+        and info["size"] / 1048576 <= spec["max_size_mb"]
+    )
+    if not issues:
+        fix = "none"
+    elif remux_only:
+        fix = "remux"
+    else:
+        fix = "encode"
+
     return {"platform": platform, "label": spec["label"], "ok": not issues,
-            "issues": issues, "note": spec["note"]}
+            "fix": fix, "issues": issues, "note": spec["note"]}
 
 
 def build_ffmpeg_cmd(src, dst, platform, info):
@@ -1448,45 +1457,76 @@ def new_video_job(name):
         "state": "uploading", "message": "正在上传…", "progress": 0,
         "info": None, "checks": None, "output": None, "created": time.time(),
         "proc": None, "logs": [], "error": None,
+        "diagnoseState": "idle", "diagnoseMessage": "", "diagnoseError": None, "diagnose": {},
     }
     with VIDEO_LOCK:
         VIDEO_JOBS[jid] = job
     return job
 
 
-def run_optimize(job, platform):
+def build_remux_cmd(src, dst):
+    """无损封装：不重编码，只修容器/faststart/负时间戳。"""
+    return ["ffmpeg", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+            "-c", "copy", "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero", str(dst)]
+
+
+def run_ffmpeg_progress(job, cmd, duration, label="编码中"):
+    add_video_log(job, "$ " + " ".join(cmd))
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            text=True, bufsize=1, creationflags=CREATE_NO_WINDOW)
+    job["proc"] = proc
+    for line in proc.stderr:
+        m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
+        if m and duration > 0:
+            secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+            job["progress"] = min(99, int(secs / duration * 100))
+            job["message"] = f"{label}… {job['progress']}%"
+        if len(line) < 200:
+            add_video_log(job, line.strip())
+    rc = proc.wait()
+    job["proc"] = None
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg 退出码 {rc}")
+
+
+def run_optimize(job, platform, mode="auto"):
     try:
         info = job["info"]
+        check = (job.get("checks") or {}).get(platform) or {}
+        if mode == "auto":
+            fix = check.get("fix")
+            mode = "remux" if fix in ("none", "remux") else "encode"
+        if mode not in ("remux", "encode"):
+            mode = "encode"
+
         job["state"] = "optimizing"
         job["progress"] = 0
-        job["message"] = "准备编码…"
+        job["message"] = "准备无损封装…" if mode == "remux" else "准备编码…"
         job["output"] = None
         job["error"] = None
         out_dir = job["dir"] / "optimized"
         out_dir.mkdir(exist_ok=True)
         base = os.path.splitext(job["name"])[0]
         out = out_dir / f"{base}_{platform}.mp4"
-        cmd = build_ffmpeg_cmd(job["path"], out, platform, info)
-        add_video_log(job, "$ " + " ".join(cmd))
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                text=True, bufsize=1, creationflags=CREATE_NO_WINDOW)
-        job["proc"] = proc
         dur = info.get("duration") or 0
-        for line in proc.stderr:
-            m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
-            if m and dur > 0:
-                secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-                job["progress"] = min(99, int(secs / dur * 100))
-                job["message"] = f"编码中… {job['progress']}%"
-            if len(line) < 200:
-                add_video_log(job, line.strip())
-        rc = proc.wait()
-        if rc != 0:
-            raise RuntimeError(f"ffmpeg 退出码 {rc}")
+
+        if mode == "remux":
+            run_ffmpeg_progress(job, build_remux_cmd(job["path"], out), dur, "无损封装中")
+        else:
+            tmp = out.with_name(out.stem + "_tmp.mp4")
+            run_ffmpeg_progress(job, build_ffmpeg_cmd(job["path"], tmp, platform, info), dur, "编码中")
+            job["message"] = "编码完成，正在无损封装…"
+            run_ffmpeg_progress(job, build_remux_cmd(tmp, out), dur, "无损封装中")
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
         job["output"] = str(out)
         job["state"] = "done"
         job["progress"] = 100
-        job["message"] = "优化完成"
+        job["message"] = "优化完成（已无损封装）"
         persist_video_history()
     except Exception as e:  # noqa: BLE001
         job["state"] = "error"
@@ -1497,13 +1537,53 @@ def run_optimize(job, platform):
         job["proc"] = None
 
 
-def start_optimize(job, platform):
+def start_optimize(job, platform, mode="auto"):
     if job.get("state") == "optimizing":
         return False
     job["state"] = "optimizing"
     job["progress"] = 0
-    job["message"] = "准备编码…"
-    threading.Thread(target=run_optimize, args=(job, platform), daemon=True).start()
+    job["message"] = "准备无损封装…" if mode == "remux" else "准备编码…"
+    threading.Thread(target=run_optimize, args=(job, platform, mode), daemon=True).start()
+    return True
+
+
+def run_video_diagnose(job, platform, api_key):
+    try:
+        job["diagnoseState"] = "running"
+        job["diagnoseMessage"] = "DeepSeek 正在分析…"
+        job["diagnoseError"] = None
+        info = job.get("info") or {}
+        spec = PLATFORM_VIDEO_SPECS[platform]
+        check = (job.get("checks") or {}).get(platform)
+        system = "你是视频编码与平台上传规范专家，只输出 JSON，不要输出解释。"
+        user = (
+            "这是视频的 ffprobe 信息（JSON）：\n"
+            f"{json.dumps(info, ensure_ascii=False, indent=1)}\n\n"
+            f"目标平台：{spec['label']}\n"
+            f"平台规格：{json.dumps(spec, ensure_ascii=False)}\n"
+            f"自动检查结果：{json.dumps(check, ensure_ascii=False)}\n\n"
+            "请判断是否符合平台要求，并给出具体问题、修复建议和推荐的 ffmpeg 输出参数。\n"
+            '返回 JSON：{"ok":true/false,"issues":["..."],"recommendations":["..."],"ffmpeg_args":"..."}\n'
+            "ffmpeg_args 不要包含输入文件，只给输出参数。"
+        )
+        raw = deepseek_chat(api_key, system, user, timeout=120)
+        obj = parse_json_loose(raw)
+        job.setdefault("diagnose", {})[platform] = obj
+        job["diagnoseState"] = "done"
+        job["diagnoseMessage"] = "DeepSeek 检查完成"
+        persist_video_history()
+    except Exception as e:  # noqa: BLE001
+        job["diagnoseState"] = "error"
+        job["diagnoseError"] = str(e)
+        job["diagnoseMessage"] = "检查失败：" + str(e)
+
+
+def start_video_diagnose(job, platform, api_key):
+    if job.get("diagnoseState") == "running":
+        return False
+    job["diagnoseState"] = "running"
+    job["diagnoseMessage"] = "DeepSeek 正在分析…"
+    threading.Thread(target=run_video_diagnose, args=(job, platform, api_key), daemon=True).start()
     return True
 
 
@@ -1515,6 +1595,10 @@ def video_job_public(job):
         "checks": job.get("checks"),
         "outputReady": bool(job.get("output") and Path(job["output"]).exists()),
         "created": job.get("created"), "logs": job.get("logs", [])[-40:],
+        "diagnoseState": job.get("diagnoseState", "idle"),
+        "diagnoseMessage": job.get("diagnoseMessage", ""),
+        "diagnoseError": job.get("diagnoseError"),
+        "diagnose": job.get("diagnose", {}),
     }
 
 
@@ -1525,6 +1609,7 @@ def persist_video_history():
             "id": j["id"], "name": j["name"], "size": j.get("size", 0),
             "state": j["state"], "output": j.get("output"), "created": j.get("created"),
             "info": j.get("info"), "checks": j.get("checks"),
+            "diagnose": j.get("diagnose", {}),
             "dir": str(j["dir"]), "message": j.get("message", ""),
         } for j in recs]
     tmp = VIDEO_HISTORY.with_suffix(".json.tmp")
@@ -1557,6 +1642,9 @@ def load_video_history():
             "info": r.get("info"), "checks": r.get("checks"),
             "output": r.get("output"), "created": r.get("created") or time.time(),
             "proc": None, "logs": [], "error": None,
+            "diagnoseState": "done" if r.get("diagnose") else "idle",
+            "diagnoseMessage": "", "diagnoseError": None,
+            "diagnose": r.get("diagnose", {}),
         }
 
 
@@ -1869,7 +1957,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "平台无效"})
             if not job.get("info"):
                 return self.send_json(400, {"error": "视频尚未分析完成"})
-            ok = start_optimize(job, platform)
+            mode = data.get("mode", "auto")
+            if mode not in ("auto", "remux", "encode"):
+                return self.send_json(400, {"error": "模式无效"})
+            ok = start_optimize(job, platform, mode)
+            return self.send_json(200, {"ok": ok})
+
+        if path == "/api/video/diagnose":
+            job = VIDEO_JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            platform = data.get("platform", "reddit")
+            if platform not in PLATFORM_VIDEO_SPECS:
+                return self.send_json(400, {"error": "平台无效"})
+            if not job.get("info"):
+                return self.send_json(400, {"error": "视频尚未分析完成"})
+            key = str(data.get("apiKey", "")).strip() or get_deepseek_key()
+            if not key:
+                return self.send_json(400, {"error": "请先在设置中填写 DeepSeek API Key"})
+            ok = start_video_diagnose(job, platform, key)
             return self.send_json(200, {"ok": ok})
 
         if path == "/api/cleanup":
