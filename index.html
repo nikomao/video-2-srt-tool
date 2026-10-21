@@ -98,6 +98,8 @@
   .bar>i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .35s}
   .bar.done>i{background:linear-gradient(90deg,#34d399,#10b981)}
   .bar.error>i{background:linear-gradient(90deg,#f87171,#ef4444)}
+  @keyframes shimmer{0%,100%{opacity:.55}50%{opacity:1}}
+  .bar.running>i{animation:shimmer 1.1s ease-in-out infinite}
   .msg{margin-top:8px;color:var(--muted);font-size:12.5px;min-height:17px;word-break:break-word}
   .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   .logs{margin-top:11px;display:none;background:#0a0e17;border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-height:180px;overflow:auto;font-family:Consolas,monospace;font-size:11.5px;color:#9aa7bd;white-space:pre-wrap}
@@ -634,7 +636,10 @@ function renderReviewPanel(){
       </div>`;
     }
     let reviewStatus='';
-    if(item.reviewState==='running') reviewStatus=`<div class="msg">${esc(item.reviewMessage||'AI 校对中…')} (${item.reviewProgress||0}%)</div>`;
+    if(item.reviewState==='running'){
+      const rp=Math.max(3,Math.min(100,item.reviewProgress||0));
+      reviewStatus=`<div class="msg">${esc(item.reviewMessage||'AI 校对中…')} ${rp}%</div><div class="bar running"><i style="width:${rp}%"></i></div>`;
+    }
     else if(item.reviewState==='error') reviewStatus=`<div class="msg" style="color:var(--err)">校对失败：${esc(item.reviewMessage)}</div>`;
     card.innerHTML=`
       <div class="card-head">
@@ -719,7 +724,7 @@ window.addEventListener('dragover',e=>e.preventDefault());
 window.addEventListener('drop',e=>{e.preventDefault(); if(e.target.closest('#dropzone'))return; addFiles(e.dataTransfer.files);});
 
 /* ---------------- 7 历史记录 / 平台文案 ---------------- */
-const PLATFORM_NAMES={youtube:'YouTube',tiktok:'TikTok',instagram:'Instagram Reels',x:'X (Twitter)',facebook:'Facebook',bilibili:'Bilibili'};
+const PLATFORM_NAMES={youtube:'YouTube',tiktok:'TikTok',instagram:'Instagram Reels',x:'X (Twitter)',facebook:'Facebook',bilibili:'Bilibili',reddit:'Reddit'};
 
 async function loadHistory(){
   try{
@@ -756,7 +761,7 @@ function renderCompactHistory(el, limit){
     const row=document.createElement('div');
     row.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line)';
     row.innerHTML=`<div style="min-width:0"><div class="name" style="font-size:13px">${esc(j.name)}</div>
-      <div class="meta">${fmtDate(j.created)} · ${stateText(j.state)}${j.subReady?' · 有字幕':''}</div></div>`;
+      <div class="meta">${fmtDate(j.created)} · ${stateText(j.state)}${j.subReady?' · 有字幕':''}${j.publishState==='running'?(' · 文案 '+(j.publishProgress||0)+'%'):''}</div></div>`;
     const btns=document.createElement('div'); btns.className='row'; btns.style.marginTop='0';
     if(j.subReady) btns.appendChild(btn('⬇ 字幕','dl small',()=>dlJ(j,'sub')));
     if(j.reviewedReady) btns.appendChild(btn('⬇ 校对版','small',()=>dlJ(j,'reviewed')));
@@ -826,9 +831,15 @@ function historyCard(j){
       </div>
       <div class="pill ${j.state==='done'?'done':(j.state==='error'||j.state==='interrupted')?'error':''}">${stateText(j.state)}</div>
     </div>`;
-  if(j.reviewState==='running') html+=`<div class="msg">${esc(j.reviewMessage||'AI 校对中…')} (${j.reviewProgress||0}%)</div>`;
+  if(j.reviewState==='running'){
+    const rp=Math.max(3,Math.min(100,j.reviewProgress||0));
+    html+=`<div class="msg">${esc(j.reviewMessage||'AI 校对中…')} ${rp}%</div><div class="bar running"><i style="width:${rp}%"></i></div>`;
+  }
   if(j.reviewReport) html+=`<div class="report"><h4>校对：修改 ${j.reviewReport.changed}/${j.reviewReport.total} 条</h4>${j.reviewReport.notes?`<div class="notes">${esc(j.reviewReport.notes)}</div>`:''}</div>`;
-  if(j.publishState==='running') html+=`<div class="msg">${esc(j.publishMessage||'生成文案中…')}</div>`;
+  if(j.publishState==='running'){
+    const pp=Math.max(3,Math.min(100,j.publishProgress||0));
+    html+=`<div class="msg">${esc(j.publishMessage||'生成文案中…')} ${pp}%</div><div class="bar running"><i style="width:${pp}%"></i></div>`;
+  }
   if(j.publishState==='error') html+=`<div class="msg" style="color:var(--err)">${esc(j.publishMessage||j.publishError||'生成失败')}</div>`;
   if(j.publish){
     html+='<div class="pub">'+Object.keys(PLATFORM_NAMES).map(k=>{
@@ -847,8 +858,8 @@ function historyCard(j){
   if(j.reviewedReady) row.appendChild(btn('⬇ 校对版','dl small',()=>dlJ(j,'reviewed')));
   if(j.path) row.appendChild(btn(j.state==='done'?'重新生成':'继续生成','small',()=>continueJob(j)));
   if(j.subReady||j.rawReady){
-    row.appendChild(btn('🧠 AI 校对','small',()=>reviewJob(j)));
-    row.appendChild(btn('✍ 生成平台文案','small',()=>publishJob(j)));
+    if(j.reviewState!=='running') row.appendChild(btn('🧠 AI 校对','small',()=>reviewJob(j)));
+    if(j.publishState!=='running') row.appendChild(btn(j.publish?'✍ 重新生成文案':'✍ 生成平台文案','small',()=>publishJob(j)));
     row.appendChild(btn('📂 文件夹','small',()=>fetch('/api/open?job='+encodeURIComponent(j.id))));
   }
   row.appendChild(btn('删除','small danger',()=>deleteJob(j)));
@@ -868,12 +879,16 @@ async function continueJob(j){
   }catch(e){ alert('无法开始：'+e.message); }
 }
 async function reviewJob(j){
-  try{ await api('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,800); }
-  catch(e){ alert('无法校对：'+e.message); }
+  j.reviewState='running'; j.reviewProgress=0; j.reviewMessage='准备校对…';
+  renderHistory(); renderHomeHistory();
+  try{ await api('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,600); }
+  catch(e){ j.reviewState='idle'; renderHistory(); alert('无法校对：'+e.message); }
 }
 async function publishJob(j){
-  try{ await api('/api/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,800); }
-  catch(e){ alert('无法生成文案：'+e.message+'\n\n请先在「④ 推荐模型」填写 DeepSeek API Key。'); }
+  j.publishState='running'; j.publishProgress=0; j.publishMessage='准备生成…';
+  renderHistory(); renderHomeHistory();
+  try{ await api('/api/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,600); }
+  catch(e){ j.publishState='idle'; renderHistory(); alert('无法生成文案：'+e.message+'\n\n请先在「④ 推荐模型」填写 DeepSeek API Key。'); }
 }
 async function deleteJob(j){
   if(!confirm('删除这条历史记录及其临时文件？')) return;
@@ -902,7 +917,7 @@ restoreJobs();
 syncServerJobs();
 setInterval(syncServerJobs,5000);
 loadHistory();
-setInterval(loadHistory,5000);
+setInterval(loadHistory,1500);
 $('#brandHome').onclick=()=>go(0);
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-goto]');

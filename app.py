@@ -92,6 +92,7 @@ PLATFORMS = {
     "x": "X (Twitter)",
     "facebook": "Facebook",
     "bilibili": "Bilibili",
+    "reddit": "Reddit",
 }
 
 JOBS = {}
@@ -885,6 +886,7 @@ def new_job(name):
         "reviewState": "idle", "reviewProgress": 0, "reviewMessage": "",
         "reviewReport": None, "reviewError": None, "detectedLang": None,
         "publish": None, "publishState": "idle", "publishMessage": "", "publishError": None,
+        "publishProgress": 0,
         "dir": d, "created": time.time(), "started": None, "proc": None,
         "params": None, "exe": None, "duration": 0.0,
     }
@@ -917,6 +919,7 @@ def job_public(job):
         "publishState": job.get("publishState", "idle"),
         "publishMessage": job.get("publishMessage", ""),
         "publishError": job.get("publishError"),
+        "publishProgress": job.get("publishProgress", 0),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
     }
 
@@ -936,6 +939,7 @@ def _job_to_record(job):
         "reviewReport": job.get("reviewReport"), "reviewError": job.get("reviewError"),
         "publish": job.get("publish"), "publishState": job.get("publishState", "idle"),
         "publishMessage": job.get("publishMessage", ""), "publishError": job.get("publishError"),
+        "publishProgress": job.get("publishProgress", 0),
         "dir": str(job["dir"]),
     }
 
@@ -1011,18 +1015,36 @@ def load_history():
         state = r.get("state", "done")
         if state in ("preparing", "transcribing", "translating", "uploading"):
             state = "interrupted"
+
+        publish_state = r.get("publishState", "idle")
+        publish_msg = r.get("publishMessage", "")
+        publish_err = r.get("publishError")
+        if publish_state == "running":
+            publish_state = "error"
+            publish_msg = "服务重启，文案生成中断，可重新生成"
+            publish_err = "interrupted"
+
+        review_state = r.get("reviewState", "idle")
+        review_msg = r.get("reviewMessage", "")
+        review_err = r.get("reviewError")
+        if review_state == "running":
+            review_state = "error"
+            review_msg = "服务重启，校对中断，可重新校对"
+            review_err = "interrupted"
+
         JOBS[jid] = {
             "id": jid, "name": r.get("name", "video"), "path": r.get("path"),
             "size": r.get("size", 0), "state": state,
             "message": r.get("message", ""), "progress": r.get("progress", 0),
             "logs": [], "error": r.get("error"),
             "raw": r.get("raw"), "sub": r.get("sub"), "reviewed": r.get("reviewed"),
-            "reviewState": r.get("reviewState", "idle"),
+            "reviewState": review_state,
             "reviewProgress": r.get("reviewProgress", 0),
-            "reviewMessage": r.get("reviewMessage", ""),
-            "reviewReport": r.get("reviewReport"), "reviewError": r.get("reviewError"),
-            "publish": r.get("publish"), "publishState": r.get("publishState", "idle"),
-            "publishMessage": r.get("publishMessage", ""), "publishError": r.get("publishError"),
+            "reviewMessage": review_msg,
+            "reviewReport": r.get("reviewReport"), "reviewError": review_err,
+            "publish": r.get("publish"), "publishState": publish_state,
+            "publishMessage": publish_msg, "publishError": publish_err,
+            "publishProgress": r.get("publishProgress", 0),
             "detectedLang": r.get("detectedLang"),
             "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
             "created": r.get("created") or time.time(), "started": r.get("started"),
@@ -1033,11 +1055,46 @@ def load_history():
     persist_history()
 
 
+PUBLISH_LIMITS = {
+    "youtube": "标题 ≤100 字符；简介 2-4 句 + 5-10 个 hashtag；不要编造时间点",
+    "tiktok": "caption ≤150 字符，带 5 个 hashtag，口语化、有钩子",
+    "instagram": "caption ≤300 字符，带 8 个 hashtag",
+    "x": "≤280 字符（含 hashtag），一句话抓眼球",
+    "facebook": "标题 ≤100 字符；简介 2-3 句 + hashtag",
+    "bilibili": "标题 ≤80 字符；简介 2-3 句 + hashtag",
+    "reddit": "标题 ≤300 字符；正文 2-4 句 + 3-5 个相关 subreddit/hashtag；像真实 Reddit 帖子，避免营销腔",
+}
+
+
+def _publish_platform(api_key, platform, transcript):
+    label = PLATFORMS.get(platform, platform)
+    system = "你是资深海外视频平台运营，只输出 JSON，不要输出解释。"
+    user = (
+        f"根据下面的字幕内容，为 {label} 生成一条英文标题和简介。\n"
+        f"要求：{PUBLISH_LIMITS.get(platform, '')}；抓眼球、有悬念或情绪，不要夸大或编造事实。\n"
+        '返回严格 JSON：{"title":"英文标题","description":"英文简介/caption"}\n'
+        f"字幕内容：\n{transcript}"
+    )
+    raw = deepseek_chat(api_key, system, user, timeout=180)
+    obj = parse_json_loose(raw)
+    if isinstance(obj, dict) and platform in obj and isinstance(obj[platform], dict):
+        obj = obj[platform]
+    title = str(obj.get("title", "")).strip() if isinstance(obj, dict) else ""
+    desc = str(obj.get("description", "")).strip() if isinstance(obj, dict) else ""
+    if not desc and isinstance(obj, dict):
+        desc = str(obj.get("caption", "")).strip()
+    return {"title": title, "description": desc}
+
+
 def run_publish(job, api_key, platforms):
     try:
         job["publishState"] = "running"
-        job["publishMessage"] = "正在分析字幕并生成文案…"
+        job["publishProgress"] = 0
+        job["publishMessage"] = "准备生成…"
         job["publishError"] = None
+        job["publish"] = {}
+        persist_history()
+
         path = job.get("sub") or job.get("raw")
         if not path:
             raise RuntimeError("没有可用的字幕")
@@ -1046,35 +1103,30 @@ def run_publish(job, api_key, platforms):
         if not transcript.strip():
             raise RuntimeError("字幕内容为空")
         transcript = transcript[:30000]
-        names = "、".join(PLATFORMS.get(p, p) for p in platforms)
-        system = "你是资深海外视频平台运营，只输出 JSON，不要输出解释。"
-        user = (
-            f"根据下面的字幕内容，为这些平台生成英文标题和简介：{names}。\n"
-            "要求：\n"
-            "- YouTube：标题 ≤100 字符；简介 2-4 句 + 5-10 个 hashtag；不要编造时间点\n"
-            "- TikTok：caption ≤150 字符，带 5 个 hashtag，口语化、有钩子\n"
-            "- Instagram Reels：caption ≤300 字符，带 8 个 hashtag\n"
-            "- X (Twitter)：≤280 字符（含 hashtag），一句话抓眼球\n"
-            "- Facebook：标题 ≤100 字符；简介 2-3 句 + hashtag\n"
-            "- Bilibili：标题 ≤80 字符；简介 2-3 句 + hashtag\n"
-            "风格：抓眼球、有悬念或情绪、符合各平台习惯；不要夸大或编造事实。\n"
-            '返回严格 JSON：{"youtube":{"title":"","description":""},'
-            '"tiktok":{"title":"","description":""},"instagram":{"title":"","description":""},'
-            '"x":{"title":"","description":""},"facebook":{"title":"","description":""},'
-            '"bilibili":{"title":"","description":""}}\n'
-            "TikTok/Instagram/X 的 title 可为空字符串，caption 填在 description。\n"
-            f"字幕内容：\n{transcript}"
-        )
-        raw = deepseek_chat(api_key, system, user, timeout=240)
-        job["publish"] = parse_json_loose(raw)
+
+        total = len(platforms)
+        result = {}
+        for idx, plat in enumerate(platforms, 1):
+            job["publishMessage"] = f"正在生成 {PLATFORMS.get(plat, plat)}（{idx}/{total}）…"
+            job["publishProgress"] = int((idx - 1) * 100 / total)
+            persist_history()
+            result[plat] = _publish_platform(api_key, plat, transcript)
+            job["publish"] = dict(result)
+            job["publishProgress"] = int(idx * 100 / total)
+            persist_history()
+            add_log(job, f"文案已生成: {PLATFORMS.get(plat, plat)}")
+
+        job["publish"] = result
+        job["publishProgress"] = 100
         job["publishState"] = "done"
-        job["publishMessage"] = "文案已生成"
+        job["publishMessage"] = f"已生成 {len(result)} 个平台文案"
         persist_history()
     except Exception as e:  # noqa: BLE001
         job["publishState"] = "error"
         job["publishError"] = str(e)
         job["publishMessage"] = "生成失败：" + str(e)
         add_log(job, "PUBLISH ERROR: " + str(e))
+        persist_history()
 
 
 def start_publish(job, api_key, platforms):
@@ -1082,7 +1134,9 @@ def start_publish(job, api_key, platforms):
         return False
     job["publish"] = None
     job["publishState"] = "running"
+    job["publishProgress"] = 0
     job["publishMessage"] = "准备生成…"
+    persist_history()
     threading.Thread(target=run_publish, args=(job, api_key, platforms), daemon=True).start()
     return True
 
