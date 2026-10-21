@@ -3,102 +3,114 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>视频字幕生成器 · 日语 / 英文</title>
+<title>视频字幕生成器 · 向导</title>
 <style>
-  :root {
-    --bg: #0b0f19;
-    --panel: #141a27;
-    --panel-2: #1b2333;
-    --line: #273043;
-    --text: #e6ecf5;
-    --muted: #8592a8;
-    --accent: #6d8bff;
-    --accent-2: #8b5cf6;
-    --ok: #34d399;
-    --warn: #fbbf24;
-    --err: #f87171;
+  :root{
+    --bg:#0b0f19;--panel:#141a27;--panel2:#1b2333;--line:#273043;--text:#e6ecf5;--muted:#8592a8;
+    --accent:#6d8bff;--accent2:#8b5cf6;--ok:#34d399;--warn:#fbbf24;--err:#f87171;
   }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0;
-    font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-    color: var(--text);
-    background:
-      radial-gradient(900px 500px at 15% -10%, rgba(109,139,255,.18), transparent 60%),
-      radial-gradient(700px 400px at 100% 0%, rgba(139,92,246,.15), transparent 60%),
-      var(--bg);
-    min-height: 100vh;
-  }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 34px 20px 60px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
-  h1 { font-size: 24px; margin: 0; letter-spacing: .3px; }
-  h1 span { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
-  .top-actions { display: flex; gap: 10px; }
-  button {
-    font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--text); padding: 9px 14px; transition: .18s;
-  }
-  button:hover { border-color: var(--accent); transform: translateY(-1px); }
-  button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
-  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; font-weight: 600; }
-  button.ghost { background: transparent; }
-  button.small { padding: 6px 10px; font-size: 12.5px; border-radius: 8px; }
-  button.dl { background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.4); color: #9af0cd; }
-  button.dl:hover { background: rgba(52,211,153,.2); }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--text);
+    background:radial-gradient(900px 500px at 15% -10%,rgba(109,139,255,.18),transparent 60%),
+      radial-gradient(700px 400px at 100% 0%,rgba(139,92,246,.15),transparent 60%),var(--bg);
+    min-height:100vh}
+  .wrap{max-width:1000px;margin:0 auto;padding:30px 20px 70px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:23px;margin:0}
+  h1 span{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:13px;margin-top:5px}
+  button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 15px;transition:.16s}
+  button:hover{border-color:var(--accent);transform:translateY(-1px)}
+  button:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  button.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff;font-weight:600}
+  button.ghost{background:transparent}
+  button.small{padding:6px 10px;font-size:12.5px;border-radius:8px}
+  button.dl{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.4);color:#9af0cd}
+  button.dl:hover{background:rgba(52,211,153,.2)}
+  button.danger{background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.35);color:#ffb4b4}
 
-  .dropzone {
-    border: 2px dashed #33405a; border-radius: 18px; padding: 34px 20px; text-align: center;
-    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
-    transition: .2s; cursor: pointer; position: relative; overflow: hidden;
-  }
-  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(109,139,255,.08); }
-  .dropzone .icon { font-size: 40px; line-height: 1; margin-bottom: 10px; }
-  .dropzone .big { font-size: 16px; font-weight: 600; }
-  .dropzone .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
-  .dropzone input { display: none; }
+  .stepper{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 20px}
+  .stp{flex:1;min-width:118px;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:9px 10px;cursor:pointer;transition:.16s;position:relative}
+  .stp:hover{border-color:var(--accent)}
+  .stp .n{font-size:11px;color:var(--muted)}
+  .stp .t{font-size:12.5px;margin-top:3px;font-weight:600}
+  .stp.active{border-color:var(--accent);background:linear-gradient(180deg,rgba(109,139,255,.16),rgba(139,92,246,.08))}
+  .stp.done .n{color:var(--ok)}
+  .stp.done:after{content:"✓";position:absolute;right:9px;top:8px;color:var(--ok);font-size:12px}
 
-  .banner {
-    margin: 16px 0 0; padding: 12px 16px; border-radius: 12px; font-size: 13px;
-    background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25); color: #f5d78a;
-  }
+  .panel{display:none;animation:in .2s ease}
+  .panel.active{display:block}
+  @keyframes in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+  .box{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:20px}
+  .box h2{font-size:16px;margin:0 0 4px}
+  .box .desc{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .nav{display:flex;justify-content:space-between;gap:10px;margin-top:18px}
 
-  .list { margin-top: 22px; display: flex; flex-direction: column; gap: 14px; }
-  .card {
-    background: linear-gradient(180deg, var(--panel), var(--panel-2));
-    border: 1px solid var(--line); border-radius: 15px; padding: 16px 18px;
-    animation: in .22s ease;
-  }
-  @keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-  .name { font-weight: 600; font-size: 14.5px; word-break: break-all; }
-  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .pill {
-    flex: none; font-size: 12px; padding: 4px 10px; border-radius: 999px; white-space: nowrap;
-    background: rgba(133,146,168,.14); color: var(--muted); border: 1px solid transparent;
-  }
-  .pill.preparing, .pill.uploading { color: #c7d2fe; background: rgba(109,139,255,.14); border-color: rgba(109,139,255,.3); }
-  .pill.transcribing, .pill.translating { color: #e9d5ff; background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.35); }
-  .pill.done { color: #9af0cd; background: rgba(52,211,153,.14); border-color: rgba(52,211,153,.35); }
-  .pill.error { color: #ffb4b4; background: rgba(248,113,113,.14); border-color: rgba(248,113,113,.35); }
+  .check{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-bottom:1px dashed var(--line)}
+  .check:last-child{border-bottom:none}
+  .dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none;background:var(--muted)}
+  .dot.ok{background:var(--ok);box-shadow:0 0 10px rgba(52,211,153,.5)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 10px rgba(251,191,36,.4)}
+  .dot.err{background:var(--err)}
+  .check .lab{font-size:13.5px;font-weight:600}
+  .check .det{font-size:12.5px;color:var(--muted);margin-top:3px;word-break:break-all}
 
-  .bar { height: 8px; background: #0e1420; border-radius: 999px; overflow: hidden; margin-top: 14px; }
-  .bar > i { display: block; height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s; }
-  .bar.done > i { background: linear-gradient(90deg, #34d399, #10b981); }
-  .bar.error > i { background: linear-gradient(90deg, #f87171, #ef4444); }
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+  .opt{border:1px solid var(--line);background:var(--panel2);border-radius:11px;padding:11px 13px;cursor:pointer;transition:.15s;font-size:13.5px}
+  .opt:hover{border-color:var(--accent)}
+  .opt.sel{border-color:var(--accent);background:linear-gradient(135deg,rgba(109,139,255,.2),rgba(139,92,246,.12));font-weight:600}
+  .opt small{display:block;color:var(--muted);font-size:11px;margin-top:3px;font-weight:400}
 
-  .msg { margin-top: 9px; color: var(--muted); font-size: 12.5px; min-height: 17px; word-break: break-word; }
-  .row { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 13px; }
-  .logs {
-    margin-top: 12px; display: none; background: #0a0e17; border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px 12px; max-height: 190px; overflow: auto;
-    font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; color: #9aa7bd; white-space: pre-wrap;
-  }
-  .logs.show { display: block; }
-  .empty { text-align: center; color: var(--muted); font-size: 13.5px; padding: 30px 0; }
-  footer { margin-top: 30px; color: #566178; font-size: 12px; text-align: center; line-height: 1.7; }
-  a { color: var(--accent); }
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .seg button{border:none;border-radius:0;background:transparent;padding:9px 18px;font-size:13px}
+  .seg button.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:600}
+
+  .rec{margin-top:16px;border:1px solid rgba(109,139,255,.35);background:rgba(109,139,255,.08);border-radius:13px;padding:15px 17px}
+  .rec .big{font-size:17px;font-weight:700}
+  .rec .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+  .chip{font-size:12px;padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:#c4cfe4}
+  .rec .why{color:var(--muted);font-size:12.5px;margin-top:11px;line-height:1.6}
+  .field{display:flex;gap:9px;margin-top:10px}
+  .field input{flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit;font-size:13px}
+  .field input:focus{outline:none;border-color:var(--accent)}
+
+  .dropzone{border:2px dashed #33405a;border-radius:16px;padding:30px 18px;text-align:center;transition:.2s;cursor:pointer}
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);background:rgba(109,139,255,.08)}
+  .dropzone .icon{font-size:38px}
+  .dropzone .big{font-size:15.5px;font-weight:600;margin-top:6px}
+  .dropzone .hint{color:var(--muted);font-size:12.5px;margin-top:7px}
+  .dropzone input{display:none}
+  .summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .summary .chip b{color:#fff;font-weight:600}
+
+  .list{display:flex;flex-direction:column;gap:13px;margin-top:18px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:15px 17px}
+  .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .name{font-weight:600;font-size:14px;word-break:break-all}
+  .meta{color:var(--muted);font-size:12px;margin-top:4px}
+  .pill{flex:none;font-size:12px;padding:4px 10px;border-radius:999px;background:rgba(133,146,168,.14);color:var(--muted);border:1px solid transparent;white-space:nowrap}
+  .pill.uploading,.pill.preparing{color:#c7d2fe;background:rgba(109,139,255,.14);border-color:rgba(109,139,255,.3)}
+  .pill.transcribing,.pill.translating{color:#e9d5ff;background:rgba(139,92,246,.16);border-color:rgba(139,92,246,.35)}
+  .pill.done{color:#9af0cd;background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.35)}
+  .pill.error{color:#ffb4b4;background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.35)}
+  .bar{height:8px;background:#0e1420;border-radius:999px;overflow:hidden;margin-top:13px}
+  .bar>i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .35s}
+  .bar.done>i{background:linear-gradient(90deg,#34d399,#10b981)}
+  .bar.error>i{background:linear-gradient(90deg,#f87171,#ef4444)}
+  .msg{margin-top:8px;color:var(--muted);font-size:12.5px;min-height:17px;word-break:break-word}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .logs{margin-top:11px;display:none;background:#0a0e17;border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-height:180px;overflow:auto;font-family:Consolas,monospace;font-size:11.5px;color:#9aa7bd;white-space:pre-wrap}
+  .logs.show{display:block}
+  .empty{text-align:center;color:var(--muted);font-size:13.5px;padding:26px 0}
+  .report{margin-top:12px;border:1px solid var(--line);background:#0c1220;border-radius:11px;padding:12px 14px}
+  .report h4{margin:0 0 6px;font-size:13px}
+  .report .notes{color:var(--muted);font-size:12.5px;white-space:pre-wrap;margin:6px 0}
+  .diff{font-size:12px;color:#9aa7bd;margin-top:8px;max-height:180px;overflow:auto}
+  .diff .d{border-top:1px dashed var(--line);padding:6px 0}
+  .diff .b{color:#ffb4b4;text-decoration:line-through}
+  .diff .a{color:#9af0cd}
+  footer{margin-top:28px;color:#566178;font-size:12px;text-align:center;line-height:1.7}
+  .hidden{display:none!important}
 </style>
 </head>
 <body>
@@ -106,278 +118,496 @@
   <header>
     <div>
       <h1>视频<span>字幕生成器</span></h1>
-      <div class="sub">拖入视频 → 自动生成日语字幕与英文字幕 → 直接下载 SRT</div>
+      <div class="sub">环境检查 → 语言 → 字幕语言 → 模型 → 生成 → DeepSeek 校对</div>
     </div>
-    <div class="top-actions">
-      <button class="ghost small" id="cleanupBtn" title="删除已完成任务的临时文件">清理已完成</button>
-    </div>
+    <button class="ghost small" id="cleanupBtn">清理已完成</button>
   </header>
 
-  <div class="dropzone" id="dropzone">
-    <div class="icon">🎬</div>
-    <div class="big">把视频拖到这里，或点击选择文件</div>
-    <div class="hint">支持 mp4 / mkv / mov / avi / webm 等，可一次拖多个</div>
-    <input type="file" id="fileInput" multiple accept="video/*,.mkv,.ts,.m2ts,.rmvb" />
-  </div>
+  <nav class="stepper" id="stepper"></nav>
 
-  <div class="banner">
-    首次运行会自动下载转录工具（约 1～2GB）；若本机 HF 缓存里已有 large-v3 模型会直接复用，否则下载模型约 3GB。CPU 模式较慢，请耐心等待。
-  </div>
+  <!-- 1 环境检查 -->
+  <section class="panel" data-step="1">
+    <div class="box">
+      <h2>① 检查环境</h2>
+      <div class="desc">确认转录引擎、GPU 加速、FFmpeg、模型与 DeepSeek 是否就绪。</div>
+      <div id="envList"><div class="empty">正在检查…</div></div>
+      <div class="nav">
+        <button class="ghost small" id="recheckBtn">重新检查</button>
+        <button class="primary" id="to2">下一步：选择视频语言</button>
+      </div>
+    </div>
+  </section>
 
-  <div class="list" id="list">
-    <div class="empty" id="empty">还没有任务。拖一个视频进来试试 👆</div>
-  </div>
+  <!-- 2 视频语言 -->
+  <section class="panel" data-step="2">
+    <div class="box">
+      <h2>② 视频里说的是什么语言？</h2>
+      <div class="desc">不确定就选「自动检测」；指定语言通常更准。</div>
+      <div class="grid" id="srcGrid"></div>
+      <div class="nav">
+        <button class="ghost" data-goto="1">上一步</button>
+        <button class="primary" id="to3">下一步：选择字幕语言</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 字幕语言 -->
+  <section class="panel" data-step="3">
+    <div class="box">
+      <h2>③ 你想要什么语言的字幕？</h2>
+      <div class="desc">选「与视频相同」= 只转写不翻译；选英语走内置翻译；其他语言用 DeepSeek 翻译。</div>
+      <div class="grid" id="tgtGrid"></div>
+      <div class="nav">
+        <button class="ghost" data-goto="2">上一步</button>
+        <button class="primary" id="to4">下一步：选择模型</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 模型推荐 -->
+  <section class="panel" data-step="4">
+    <div class="box">
+      <h2>④ 推荐最优模型</h2>
+      <div class="desc">根据你的显卡 / 内存自动推荐；也可以手动覆盖。</div>
+      <div class="seg" id="prefSeg">
+        <button data-pref="quality">质量优先</button>
+        <button data-pref="balanced" class="on">均衡</button>
+        <button data-pref="speed">速度优先</button>
+      </div>
+      <div id="recBox" class="rec"><div class="empty">正在分析硬件…</div></div>
+      <div class="field" style="margin-top:16px">
+        <select id="modelSelect" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
+      </div>
+      <div style="margin-top:20px;border-top:1px solid var(--line);padding-top:16px">
+        <div style="font-size:13.5px;font-weight:600">DeepSeek API Key（可选）</div>
+        <div class="sub" style="margin-top:4px">用于「字幕校对」，以及翻译成英语以外的目标语言。仅保存在本机 config.json。</div>
+        <div class="field">
+          <input id="dsKey" type="password" placeholder="sk-..." autocomplete="off" />
+          <button class="small" id="saveKey">保存</button>
+        </div>
+        <div class="meta" id="dsStatus" style="margin-top:7px"></div>
+      </div>
+      <div class="nav">
+        <button class="ghost" data-goto="3">上一步</button>
+        <button class="primary" id="to5">下一步：上传视频并生成</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 生成 -->
+  <section class="panel" data-step="5">
+    <div class="box">
+      <h2>⑤ 上传视频并生成字幕</h2>
+      <div class="desc">把视频拖进来，会自动按上面的设置开始生成。</div>
+      <div class="summary" id="summary"></div>
+      <div class="dropzone" id="dropzone">
+        <div class="icon">🎬</div>
+        <div class="big">把视频拖到这里，或点击选择</div>
+        <div class="hint">mp4 / mkv / mov / avi / webm…（可一次多个）</div>
+        <input type="file" id="fileInput" multiple accept="video/*,.mkv,.ts,.m2ts,.rmvb" />
+      </div>
+      <div class="list" id="list"><div class="empty" id="empty">还没有任务</div></div>
+      <div class="nav">
+        <button class="ghost" data-goto="4">上一步</button>
+        <button class="primary" id="to6">下一步：检查字幕</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 校对 -->
+  <section class="panel" data-step="6">
+    <div class="box">
+      <h2>⑥ 检查 / 校对字幕</h2>
+      <div class="desc">用 DeepSeek 检查语音识别错误、错别字、语句和标点，并生成校对版字幕。</div>
+      <div id="reviewList"><div class="empty">还没有生成完成的字幕。</div></div>
+      <div class="nav">
+        <button class="ghost" data-goto="5">上一步</button>
+        <button class="ghost" data-goto="1">回到环境检查</button>
+      </div>
+    </div>
+  </section>
 
   <footer>
-    本地运行，视频不会上传到互联网 · 服务关掉后任务列表会清空<br/>
-    输出位置：D:\Codes\subtitle-webapp\work\&lt;任务&gt;\Subtitles_*\Japanese 与 English
+    本地运行 · 视频不会上传到互联网 · 输出位于 D:\Codes\subtitle-webapp\work\&lt;任务&gt;\
   </footer>
 </div>
 
 <script>
-const listEl = document.getElementById('list');
-const emptyEl = document.getElementById('empty');
-const dropzone = document.getElementById('dropzone');
-const fileInput = document.getElementById('fileInput');
-const cleanupBtn = document.getElementById('cleanupBtn');
+const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
+const STEP_NAMES = ['环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕'];
 
-const items = new Map();   // id -> item
-let seq = 0;
+const S = {
+  step: 1,
+  env: null,
+  sourceLang: localStorage.getItem('srcLang') || 'auto',
+  targetLang: localStorage.getItem('tgtLang') || 'same',
+  preference: localStorage.getItem('pref') || 'balanced',
+  rec: null,
+  model: null,
+  device: null,
+  computeType: null,
+  items: new Map(),
+  seq: 0,
+};
 
-function fmtSize(n) {
-  if (!n) return '0 B';
-  const u = ['B','KB','MB','GB','TB'];
-  let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return n.toFixed(n >= 10 ? 0 : 1) + ' ' + u[i];
+const $ = s => document.querySelector(s);
+const stepperEl = $('#stepper');
+const listEl = $('#list');
+const emptyEl = $('#empty');
+const dropzone = $('#dropzone');
+const fileInput = $('#fileInput');
+
+/* ---------------- 通用 ---------------- */
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const txt = await r.text();
+  let data = {}; try { data = JSON.parse(txt); } catch(e) { data = { raw: txt }; }
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
 }
-function pillText(state) {
-  return ({
-    uploading: '上传中', uploaded: '已上传', preparing: '准备工具',
-    transcribing: '生成日语', translating: '生成英文',
-    done: '完成', error: '失败', canceled: '已取消'
-  })[state] || state;
-}
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtSize(n){ if(!n) return '0 B'; const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n>=10?0:1)+' '+u[i]; }
+function pillText(st){ return ({uploading:'上传中',uploaded:'已上传',preparing:'准备工具',transcribing:'转录中',translating:'翻译中',done:'完成',error:'失败'})[st]||st; }
 
-function createCard(item) {
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.innerHTML = `
-    <div class="card-head">
-      <div>
-        <div class="name"></div>
-        <div class="meta"></div>
-      </div>
-      <div class="pill"></div>
-    </div>
-    <div class="bar"><i></i></div>
-    <div class="msg"></div>
-    <div class="row"></div>
-    <div class="logs"></div>
-  `;
-  item.el = card;
-  item.$name = card.querySelector('.name');
-  item.$meta = card.querySelector('.meta');
-  item.$pill = card.querySelector('.pill');
-  item.$bar = card.querySelector('.bar');
-  item.$fill = card.querySelector('.bar > i');
-  item.$msg = card.querySelector('.msg');
-  item.$row = card.querySelector('.row');
-  item.$logs = card.querySelector('.logs');
-  item.$name.textContent = item.name;
-  item.$meta.textContent = fmtSize(item.size);
-  listEl.appendChild(card);
-  updateCard(item);
-  return card;
-}
-
-function updateCard(item) {
-  if (!item.el) return;
-  const st = item.state || 'uploading';
-  item.$pill.textContent = pillText(st);
-  item.$pill.className = 'pill ' + st;
-  item.$bar.className = 'bar ' + (st === 'done' ? 'done' : st === 'error' ? 'error' : '');
-  const p = Math.max(0, Math.min(100, item.progress || 0));
-  item.$fill.style.width = p + '%';
-  item.$msg.textContent = item.message || '';
-  item.$meta.textContent = fmtSize(item.size) + (item.elapsed ? ' · 已用 ' + item.elapsed + 's' : '');
-
-  // 按钮区
-  item.$row.innerHTML = '';
-  if (item.jobId) {
-    if (item.jaReady) {
-      item.$row.appendChild(btn('⬇ 日语字幕', 'dl', () => download(item, 'ja')));
-    }
-    if (item.enReady) {
-      item.$row.appendChild(btn('⬇ 英文字幕', 'dl', () => download(item, 'en')));
-    }
-    if (item.jaReady || item.enReady) {
-      item.$row.appendChild(btn('📂 打开文件夹', 'small', () => openFolder(item)));
-    }
-    if (['preparing','transcribing','translating','uploading'].includes(st)) {
-      item.$row.appendChild(btn('取消', 'small', () => cancel(item)));
-    }
-    if (item.logs && item.logs.length) {
-      item.$row.appendChild(btn('日志', 'small', () => item.$logs.classList.toggle('show')));
-    }
+/* ---------------- 步骤条 ---------------- */
+function buildStepper(){
+  stepperEl.innerHTML = '';
+  for (let i=1;i<=6;i++){
+    const d=document.createElement('div');
+    d.className='stp'; d.dataset.step=i;
+    d.innerHTML=`<div class="n">STEP ${i}</div><div class="t">${STEP_NAMES[i-1]}</div>`;
+    d.onclick=()=>go(i);
+    stepperEl.appendChild(d);
   }
-  if (item.logs) item.$logs.textContent = item.logs.slice(-100).join('\n');
+}
+function go(step){
+  S.step = step;
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', +p.dataset.step===step));
+  document.querySelectorAll('.stp').forEach(s=>{
+    const n=+s.dataset.step;
+    s.classList.toggle('active', n===step);
+    s.classList.toggle('done', n<step);
+  });
+  if (step===4 && !S.rec) loadRecommendation();
+  if (step===6) renderReviewPanel();
+  window.scrollTo({top:0,behavior:'smooth'});
 }
 
-function btn(text, cls, onClick) {
-  const b = document.createElement('button');
-  b.className = cls; b.textContent = text; b.onclick = onClick;
-  return b;
+/* ---------------- 1 环境 ---------------- */
+async function loadEnv(force){
+  $('#envList').innerHTML = '<div class="empty">正在检查环境…</div>';
+  try{
+    const env = await api('/api/env' + (force?'?refresh=1':''));
+    S.env = env;
+    renderEnv(env);
+  }catch(e){
+    $('#envList').innerHTML = `<div class="empty" style="color:var(--err)">检查失败：${esc(e.message)}</div>`;
+  }
 }
-function download(item, lang) {
-  window.location.href = `/api/download?job=${encodeURIComponent(item.jobId)}&lang=${lang}`;
+function renderEnv(env){
+  const rows = env.items.map(it=>`
+    <div class="check">
+      <div class="dot ${it.status}"></div>
+      <div><div class="lab">${esc(it.label)}</div><div class="det">${esc(it.detail)}</div></div>
+    </div>`).join('');
+  $('#envList').innerHTML = rows;
 }
-async function openFolder(item) {
-  await fetch(`/api/open?job=${encodeURIComponent(item.jobId)}`);
+$('#recheckBtn').onclick = ()=>loadEnv(true);
+$('#to2').onclick = ()=>go(2);
+
+/* ---------------- 2/3 语言 ---------------- */
+function renderLangGrid(el, selected, includeSame, onPick){
+  const entries = includeSame ? [['same','与视频相同'], ...Object.entries(LANGS).filter(([k])=>k!=='auto')]
+                              : Object.entries(LANGS);
+  el.innerHTML = '';
+  for (const [k,label] of entries){
+    const d=document.createElement('div');
+    d.className='opt'+(selected===k?' sel':'');
+    d.innerHTML=esc(label)+(k==='auto'?'<small>不确定时使用</small>':'');
+    d.onclick=()=>{ onPick(k); renderLangGrid(el,k,includeSame,onPick); };
+    el.appendChild(d);
+  }
 }
-async function cancel(item) {
-  await fetch('/api/cancel', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ jobId: item.jobId }) });
+function initLang(){
+  renderLangGrid($('#srcGrid'), S.sourceLang, false, k=>{ S.sourceLang=k; localStorage.setItem('srcLang',k); updateSummary(); });
+  renderLangGrid($('#tgtGrid'), S.targetLang, true, k=>{ S.targetLang=k; localStorage.setItem('tgtLang',k); updateSummary(); });
+  $('#to3').onclick=()=>go(3);
+  $('#to4').onclick=()=>{ go(4); loadRecommendation(); };
 }
 
-function addFiles(files) {
-  const list = Array.from(files).filter(f => f && f.size > 0);
-  if (!list.length) return;
-  emptyEl.style.display = 'none';
-  for (const file of list) {
-    const item = {
-      key: 'k' + (++seq), jobId: null, file,
-      name: file.name, size: file.size,
-      state: 'uploading', progress: 0, message: '准备上传…',
-      logs: [], jaReady: false, enReady: false, elapsed: 0,
-      startedAt: Date.now()
-    };
-    items.set(item.key, item);
+/* ---------------- 4 模型 ---------------- */
+async function loadRecommendation(){
+  if (!S.rec) $('#recBox').innerHTML = '<div class="empty">正在分析硬件…</div>';
+  try{
+    const rec = await api('/api/recommend', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preference:S.preference})});
+    S.rec = rec;
+    if (!S.model) S.model = rec.model;
+    S.device = rec.device; S.computeType = rec.computeType;
+    renderRec();
+    if (!S.env) loadEnv();
+  }catch(e){
+    $('#recBox').innerHTML = `<div class="empty" style="color:var(--err)">推荐失败：${esc(e.message)}</div>`;
+  }
+}
+function renderRec(){
+  const rec = S.rec; if (!rec) return;
+  $('#recBox').innerHTML = `
+    <div class="big">${esc(rec.model)}</div>
+    <div class="chips">
+      <span class="chip">设备：${esc(rec.device)}</span>
+      <span class="chip">精度：${esc(rec.computeType)}</span>
+      <span class="chip">偏好：${({quality:'质量优先',balanced:'均衡',speed:'速度优先'})[rec.preference]||rec.preference}</span>
+    </div>
+    <div class="why">${esc(rec.reason)}</div>`;
+  const sel=$('#modelSelect'); sel.innerHTML='';
+  for (const o of rec.options){
+    const op=document.createElement('option'); op.value=o.value; op.textContent=o.label;
+    if (o.value===S.model) op.selected=true;
+    sel.appendChild(op);
+  }
+  sel.onchange=()=>{ S.model=sel.value; };
+}
+document.querySelectorAll('#prefSeg button').forEach(b=>{
+  b.onclick=()=>{
+    S.preference=b.dataset.pref;
+    localStorage.setItem('pref',S.preference);
+    document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    S.model=null; loadRecommendation();
+  };
+});
+$('#to5').onclick=()=>{ updateSummary(); go(5); };
+
+/* ---------------- DeepSeek Key ---------------- */
+async function loadKeyStatus(){
+  try{
+    const c = await api('/api/config');
+    $('#dsStatus').textContent = c.hasKey ? ('已配置：' + c.masked) : '未配置（字幕校对 / 中文等翻译需要）';
+    if (c.hasKey) $('#dsStatus').style.color='var(--ok)'; else $('#dsStatus').style.color='var(--muted)';
+  }catch(e){}
+}
+$('#saveKey').onclick=async()=>{
+  const key=$('#dsKey').value.trim();
+  try{
+    await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deepseekKey:key})});
+    $('#dsKey').value='';
+    await loadKeyStatus();
+    alert(key?'已保存 DeepSeek Key':'已清除 DeepSeek Key');
+  }catch(e){ alert('保存失败：'+e.message); }
+};
+
+/* ---------------- 摘要 ---------------- */
+function updateSummary(){
+  const el=$('#summary'); if(!el) return;
+  const src = LANGS[S.sourceLang]||S.sourceLang;
+  const tgt = S.targetLang==='same' ? '与视频相同' : (LANGS[S.targetLang]||S.targetLang);
+  el.innerHTML = `
+    <span class="chip">视频语言：<b>${esc(src)}</b></span>
+    <span class="chip">字幕语言：<b>${esc(tgt)}</b></span>
+    <span class="chip">模型：<b>${esc(S.model||'-')}</b></span>
+    <span class="chip">加速：<b>${esc(S.device||'-')} / ${esc(S.computeType||'-')}</b></span>`;
+}
+
+/* ---------------- 5 上传 ---------------- */
+function addFiles(files){
+  const arr=Array.from(files).filter(f=>f&&f.size>0);
+  if(!arr.length) return;
+  emptyEl.style.display='none';
+  for(const file of arr){
+    const item={key:'k'+(++S.seq),jobId:null,file,name:file.name,size:file.size,
+      state:'uploading',progress:0,message:'准备上传…',logs:[],subReady:false,rawReady:false,
+      reviewedReady:false,reviewState:'idle',reviewProgress:0,reviewMessage:'',reviewReport:null,
+      elapsed:0,params:{...{sourceLang:S.sourceLang,targetLang:S.targetLang,model:S.model,device:S.device,computeType:S.computeType}}};
+    S.items.set(item.key,item);
     createCard(item);
     uploadItem(item);
   }
 }
+function createCard(item){
+  const card=document.createElement('div'); card.className='card';
+  card.innerHTML=`
+    <div class="card-head"><div><div class="name"></div><div class="meta"></div></div><div class="pill"></div></div>
+    <div class="bar"><i></i></div><div class="msg"></div><div class="row"></div><div class="logs"></div>`;
+  item.el=card;
+  item.$pill=card.querySelector('.pill'); item.$bar=card.querySelector('.bar');
+  item.$fill=card.querySelector('.bar>i'); item.$msg=card.querySelector('.msg');
+  item.$row=card.querySelector('.row'); item.$logs=card.querySelector('.logs');
+  card.querySelector('.name').textContent=item.name;
+  card.querySelector('.meta').textContent=fmtSize(item.size);
+  listEl.appendChild(card);
+  updateCard(item);
+}
+function updateCard(item){
+  if(!item.el) return;
+  const st=item.state||'uploading';
+  item.$pill.textContent=pillText(st);
+  item.$pill.className='pill '+st;
+  item.$bar.className='bar '+(st==='done'?'done':st==='error'?'error':'');
+  item.$fill.style.width=Math.max(0,Math.min(100,item.progress||0))+'%';
+  item.$msg.textContent=item.message||'';
+  item.el.querySelector('.meta').textContent=fmtSize(item.size)+(item.elapsed?' · 已用 '+item.elapsed+'s':'');
+  const row=item.$row; row.innerHTML='';
+  if(item.jobId){
+    if(item.subReady) row.appendChild(btn('⬇ 字幕','dl small',()=>dl(item,'sub')));
+    if(item.rawReady) row.appendChild(btn('⬇ 原语言','small',()=>dl(item,'raw')));
+    if(item.reviewedReady) row.appendChild(btn('⬇ 校对版','dl small',()=>dl(item,'reviewed')));
+    if(item.subReady||item.rawReady) row.appendChild(btn('📂 文件夹','small',()=>openFolder(item)));
+    if(['uploading','preparing','transcribing','translating'].includes(st)) row.appendChild(btn('取消','small danger',()=>cancel(item)));
+    if(item.logs&&item.logs.length) row.appendChild(btn('日志','small',()=>item.$logs.classList.toggle('show')));
+  }
+  if(item.logs) item.$logs.textContent=item.logs.slice(-120).join('\n');
+}
+function btn(text,cls,onClick){ const b=document.createElement('button'); b.className=cls; b.textContent=text; b.onclick=onClick; return b; }
+function dl(item,lang){ window.location.href=`/api/download?job=${encodeURIComponent(item.jobId)}&lang=${lang}`; }
+async function openFolder(item){ await fetch(`/api/open?job=${encodeURIComponent(item.jobId)}`); }
+async function cancel(item){ await fetch('/api/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:item.jobId})}); }
 
-function uploadItem(item) {
-  const xhr = new XMLHttpRequest();
-  item.xhr = xhr;
-  xhr.open('POST', '/api/upload?name=' + encodeURIComponent(item.name));
-  xhr.upload.onprogress = e => {
-    if (e.lengthComputable) {
-      item.progress = Math.round(e.loaded / e.total * 88);
-      item.message = `上传中… ${fmtSize(e.loaded)} / ${fmtSize(e.total)}`;
-      updateCard(item);
+function uploadItem(item){
+  const xhr=new XMLHttpRequest(); item.xhr=xhr;
+  xhr.open('POST','/api/upload?name='+encodeURIComponent(item.name));
+  xhr.upload.onprogress=e=>{ if(e.lengthComputable){ item.progress=Math.round(e.loaded/e.total*85); item.message=`上传中… ${fmtSize(e.loaded)} / ${fmtSize(e.total)}`; updateCard(item);} };
+  xhr.onload=()=>{
+    if(xhr.status>=200&&xhr.status<300){
+      let res={}; try{res=JSON.parse(xhr.responseText);}catch(e){}
+      item.jobId=res.jobId; item.state='uploaded'; item.progress=0; item.message='上传完成，开始生成…';
+      updateCard(item); saveJobs();
+      startItem(item);
+    }else{
+      let msg='上传失败'; try{msg=JSON.parse(xhr.responseText).error||msg;}catch(e){}
+      fail(item,msg);
     }
   };
-  xhr.onload = () => {
-    if (xhr.status >= 200 && xhr.status < 300) {
-      let res = {};
-      try { res = JSON.parse(xhr.responseText); } catch (e) {}
-      item.jobId = res.jobId;
-      item.state = 'uploaded';
-      item.progress = 0;
-      item.message = '上传完成，开始生成…';
-      updateCard(item);
-      saveJobs();
-      fetch('/api/start', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ jobId: item.jobId })
-      });
-    } else {
-      fail(item, '上传失败（' + xhr.status + '）');
-    }
-  };
-  xhr.onerror = () => fail(item, '上传失败：网络错误');
+  xhr.onerror=()=>fail(item,'上传失败：网络错误');
   xhr.send(item.file);
 }
+async function startItem(item){
+  try{
+    await api('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:item.jobId,...item.params})});
+  }catch(e){
+    fail(item,e.message);
+  }
+}
+function fail(item,msg){ item.state='error'; item.message=msg; item.error=msg; updateCard(item); }
 
-function fail(item, msg) {
-  item.state = 'error';
-  item.message = msg;
-  item.error = msg;
+function applyStatus(item,s){
+  item.state=s.state; item.progress=s.progress; item.message=s.message;
+  item.logs=s.logs||item.logs; item.subReady=s.subReady; item.rawReady=s.rawReady;
+  item.reviewedReady=s.reviewedReady; item.reviewState=s.reviewState;
+  item.reviewProgress=s.reviewProgress; item.reviewMessage=s.reviewMessage;
+  item.reviewReport=s.reviewReport; item.elapsed=s.elapsed||0;
+  if(s.detectedLang) item.detectedLang=s.detectedLang;
   updateCard(item);
+  if(s.state==='done'||s.state==='error') saveJobs();
 }
-
-function applyStatus(item, s) {
-  item.state = s.state;
-  item.progress = s.progress;
-  item.message = s.message;
-  item.logs = s.logs || item.logs;
-  item.jaReady = s.jaReady;
-  item.enReady = s.enReady;
-  item.elapsed = s.elapsed || 0;
-  item.error = s.error;
-  updateCard(item);
-  if (s.state === 'done' || s.state === 'error') saveJobs();
+async function poll(){
+  let reviewDirty=false;
+  for(const item of S.items.values()){
+    if(!item.jobId) continue;
+    if(item.state==='done'&&item.reviewState==='done') continue;
+    if(item.state==='error') continue;
+    try{
+      const r=await fetch('/api/status?job='+encodeURIComponent(item.jobId),{cache:'no-store'});
+      if(r.ok){ const s=await r.json(); applyStatus(item,s); reviewDirty=true; }
+      else if(r.status===404){ item.state='error'; item.message='任务已失效（服务重启过）'; updateCard(item); }
+    }catch(e){}
+  }
+  if((S.step===6||reviewDirty)&&document.querySelector('.panel.active')?.dataset.step==='6') renderReviewPanel();
 }
+setInterval(poll,1200);
 
-async function poll() {
-  for (const item of items.values()) {
-    if (!item.jobId) continue;
-    if (item.state === 'done' || item.state === 'error') continue;
-    try {
-      const r = await fetch('/api/status?job=' + encodeURIComponent(item.jobId), { cache: 'no-store' });
-      if (r.ok) applyStatus(item, await r.json());
-      else if (r.status === 404) { item.state = 'error'; item.message = '任务已失效（服务重启过）'; updateCard(item); }
-    } catch (e) { /* ignore */ }
+/* ---------------- 6 校对 ---------------- */
+function renderReviewPanel(){
+  const el=$('#reviewList');
+  const done=[...S.items.values()].filter(it=>it.subReady||it.rawReady);
+  if(!done.length){ el.innerHTML='<div class="empty">还没有生成完成的字幕。</div>'; return; }
+  el.innerHTML='';
+  for(const item of done){
+    const card=document.createElement('div'); card.className='card';
+    const report=item.reviewReport;
+    let reportHtml='';
+    if(report){
+      const samples=(report.samples||[]).map(x=>`<div class="d"><div class="b">#${x.i} ${esc(x.before)}</div><div class="a">#${x.i} ${esc(x.after)}</div></div>`).join('');
+      reportHtml=`<div class="report">
+        <h4>校对结果：修改 ${report.changed} / ${report.total} 条</h4>
+        ${report.notes?`<div class="notes">${esc(report.notes)}</div>`:''}
+        ${samples?`<div class="diff">${samples}</div>`:''}
+      </div>`;
+    }
+    let reviewStatus='';
+    if(item.reviewState==='running') reviewStatus=`<div class="msg">${esc(item.reviewMessage||'AI 校对中…')} (${item.reviewProgress||0}%)</div>`;
+    else if(item.reviewState==='error') reviewStatus=`<div class="msg" style="color:var(--err)">校对失败：${esc(item.reviewMessage)}</div>`;
+    card.innerHTML=`
+      <div class="card-head">
+        <div><div class="name">${esc(item.name)}</div>
+          <div class="meta">${S.sourceLang?('视频：'+esc(LANGS[item.params?.sourceLang]||item.params?.sourceLang||'-')):''}
+            ${item.detectedLang?(' · 检测到 '+esc(item.detectedLang)):''}
+            ${item.params?(' · 字幕：'+esc(item.params.targetLang==='same'?'与原语言相同':(LANGS[item.params.targetLang]||item.params.targetLang))):''}</div>
+        </div>
+        <div class="pill ${item.state}">${pillText(item.state)}</div>
+      </div>
+      ${reviewStatus}${reportHtml}
+      <div class="row"></div>`;
+    const row=card.querySelector('.row');
+    if(item.subReady) row.appendChild(btn('⬇ 字幕','dl small',()=>dl(item,'sub')));
+    if(item.rawReady) row.appendChild(btn('⬇ 原语言','small',()=>dl(item,'raw')));
+    if(item.reviewedReady) row.appendChild(btn('⬇ 下载校对版','dl small',()=>dl(item,'reviewed')));
+    if(item.reviewState!=='running') row.appendChild(btn('🧠 AI 校对（DeepSeek）','small',()=>doReview(item)));
+    row.appendChild(btn('📂 文件夹','small',()=>openFolder(item)));
+    el.appendChild(card);
   }
 }
-setInterval(poll, 1200);
-
-// 刷新页面后恢复历史任务
-function saveJobs() {
-  const arr = [];
-  for (const it of items.values()) {
-    if (it.jobId) arr.push({ id: it.jobId, name: it.name, size: it.size, state: it.state });
-  }
-  localStorage.setItem('subtitleJobs', JSON.stringify(arr.slice(-30)));
-}
-async function restoreJobs() {
-  let arr = [];
-  try { arr = JSON.parse(localStorage.getItem('subtitleJobs') || '[]'); } catch (e) {}
-  for (const j of arr) {
-    try {
-      const r = await fetch('/api/status?job=' + encodeURIComponent(j.id), { cache: 'no-store' });
-      if (!r.ok) continue;
-      const s = await r.json();
-      const item = {
-        key: 'r' + (++seq), jobId: j.id, file: null,
-        name: s.name, size: s.size, state: s.state, progress: s.progress,
-        message: s.message, logs: s.logs || [], jaReady: s.jaReady,
-        enReady: s.enReady, elapsed: s.elapsed || 0, startedAt: Date.now()
-      };
-      items.set(item.key, item);
-      emptyEl.style.display = 'none';
-      createCard(item);
-    } catch (e) {}
+async function doReview(item){
+  try{
+    await api('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:item.jobId})});
+    item.reviewState='running'; item.reviewMessage='准备校对…'; item.reviewProgress=0;
+    renderReviewPanel();
+  }catch(e){
+    alert('无法开始校对：'+e.message+'\n\n请先在「④ 推荐模型」里填写 DeepSeek API Key。');
   }
 }
 
-// 拖拽
-['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => {
-  e.preventDefault(); e.stopPropagation(); dropzone.classList.add('drag');
-}));
-['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => {
-  e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('drag');
-}));
-dropzone.addEventListener('drop', e => addFiles(e.dataTransfer.files));
-dropzone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => { addFiles(e.target.files); fileInput.value = ''; });
-
-// 整个页面也能拖
-window.addEventListener('dragover', e => e.preventDefault());
-window.addEventListener('drop', e => {
-  e.preventDefault();
-  if (e.target.closest('#dropzone')) return;
-  addFiles(e.dataTransfer.files);
-});
-
-cleanupBtn.addEventListener('click', async () => {
-  if (!confirm('删除所有已完成/失败任务的临时文件？字幕文件也会被删除。')) return;
-  await fetch('/api/cleanup', { method: 'POST' });
+/* ---------------- 清理 / 持久化 ---------------- */
+$('#cleanupBtn').onclick=async()=>{
+  if(!confirm('删除所有已完成/失败任务的临时文件？字幕也会被删除。')) return;
+  await fetch('/api/cleanup',{method:'POST'});
   localStorage.removeItem('subtitleJobs');
   location.reload();
-});
+};
+function saveJobs(){
+  const arr=[...S.items.values()].filter(it=>it.jobId).map(it=>({id:it.jobId,name:it.name,size:it.size}));
+  localStorage.setItem('subtitleJobs',JSON.stringify(arr.slice(-30)));
+}
+async function restoreJobs(){
+  let arr=[]; try{arr=JSON.parse(localStorage.getItem('subtitleJobs')||'[]');}catch(e){}
+  for(const j of arr){
+    try{
+      const s=await api('/api/status?job='+encodeURIComponent(j.id));
+      const item={key:'r'+(++S.seq),jobId:j.id,file:null,name:s.name,size:s.size,state:s.state,
+        progress:s.progress,message:s.message,logs:s.logs||[],subReady:s.subReady,rawReady:s.rawReady,
+        reviewedReady:s.reviewedReady,reviewState:s.reviewState,reviewProgress:s.reviewProgress,
+        reviewMessage:s.reviewMessage,reviewReport:s.reviewReport,elapsed:s.elapsed||0,params:s.params,detectedLang:s.detectedLang};
+      S.items.set(item.key,item); emptyEl.style.display='none'; createCard(item);
+    }catch(e){}
+  }
+}
 
+/* ---------------- 拖拽 ---------------- */
+['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();dropzone.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();dropzone.classList.remove('drag');}));
+dropzone.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
+dropzone.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{addFiles(e.target.files);fileInput.value='';});
+window.addEventListener('dragover',e=>e.preventDefault());
+window.addEventListener('drop',e=>{e.preventDefault(); if(e.target.closest('#dropzone'))return; addFiles(e.dataTransfer.files);});
+
+/* ---------------- 初始化 ---------------- */
+buildStepper();
+initLang();
+document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x.dataset.pref===S.preference));
+updateSummary();
+loadEnv();
+loadKeyStatus();
 restoreJobs();
+go(1);
 </script>
 </body>
 </html>
