@@ -127,7 +127,10 @@
       <h1>视频<span>字幕生成器</span></h1>
       <div class="sub">环境检查 → 语言 → 字幕语言 → 模型 → 生成 → DeepSeek 校对</div>
     </div>
-    <button class="ghost small" id="cleanupBtn">清理已完成</button>
+    <div class="top-actions">
+      <button class="ghost small" id="historyBtn">📚 历史记录 <span id="histCount"></span></button>
+      <button class="ghost small" id="cleanupBtn">清理已完成</button>
+    </div>
   </header>
 
   <nav class="stepper" id="stepper"></nav>
@@ -214,6 +217,15 @@
         <input type="file" id="fileInput" multiple accept="video/*,.mkv,.ts,.m2ts,.rmvb" />
       </div>
       <div class="list" id="list"><div class="empty" id="empty">还没有任务</div></div>
+
+      <div style="margin-top:22px;border-top:1px solid var(--line);padding-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:600">📚 历史列表</div>
+          <button class="ghost small" id="openHistoryBtn">查看全部 / 平台文案</button>
+        </div>
+        <div id="recentHistory"><div class="empty">暂无历史记录</div></div>
+      </div>
+
       <div class="nav">
         <button class="ghost" data-goto="4">上一步</button>
         <button class="primary" id="to6">下一步：检查字幕</button>
@@ -668,7 +680,9 @@ async function loadHistory(){
     const r=await api('/api/history');
     S.history=r.jobs||[];
     renderHistory();
+    renderRecentHistory();
     updateNextButtons();
+    const c=$('#histCount'); if(c) c.textContent='('+(S.history||[]).length+')';
   }catch(e){}
 }
 function fmtDate(ts){
@@ -685,6 +699,24 @@ function renderHistory(){
   if(!jobs.length){ el.innerHTML='<div class="empty">暂无历史记录</div>'; return; }
   el.innerHTML='';
   for(const j of jobs) el.appendChild(historyCard(j));
+}
+function renderRecentHistory(){
+  const el=$('#recentHistory'); if(!el) return;
+  const jobs=(S.history||[]).slice(0,6);
+  if(!jobs.length){ el.innerHTML='<div class="empty">暂无历史记录</div>'; return; }
+  el.innerHTML='';
+  for(const j of jobs){
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line)';
+    row.innerHTML=`<div style="min-width:0"><div class="name" style="font-size:13px">${esc(j.name)}</div>
+      <div class="meta">${fmtDate(j.created)} · ${stateText(j.state)}${j.subReady?' · 有字幕':''}</div></div>`;
+    const btns=document.createElement('div'); btns.className='row'; btns.style.marginTop='0';
+    if(j.subReady) btns.appendChild(btn('⬇ 字幕','dl small',()=>dlJ(j,'sub')));
+    if(j.reviewedReady) btns.appendChild(btn('⬇ 校对版','small',()=>dlJ(j,'reviewed')));
+    btns.appendChild(btn('详情','small',()=>go(7)));
+    row.appendChild(btns);
+    el.appendChild(row);
+  }
 }
 function historyCard(j){
   const card=document.createElement('div'); card.className='card';
@@ -754,6 +786,8 @@ async function deleteJob(j){
   await api('/api/history/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})});
   loadHistory();
 }
+$('#historyBtn').onclick=()=>go(7);
+$('#openHistoryBtn').onclick=()=>go(7);
 $('#refreshHistoryBtn').onclick=loadHistory;
 $('#clearHistoryBtn').onclick=async()=>{
   if(!confirm('清空所有已完成/失败的历史记录和临时文件？')) return;
