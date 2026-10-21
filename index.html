@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>视频字幕生成器 · 日语 / 英文</title>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --panel: #141a27;
+    --panel-2: #1b2333;
+    --line: #273043;
+    --text: #e6ecf5;
+    --muted: #8592a8;
+    --accent: #6d8bff;
+    --accent-2: #8b5cf6;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(900px 500px at 15% -10%, rgba(109,139,255,.18), transparent 60%),
+      radial-gradient(700px 400px at 100% 0%, rgba(139,92,246,.15), transparent 60%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 34px 20px 60px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: .3px; }
+  h1 span { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .top-actions { display: flex; gap: 10px; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); padding: 9px 14px; transition: .18s;
+  }
+  button:hover { border-color: var(--accent); transform: translateY(-1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; font-weight: 600; }
+  button.ghost { background: transparent; }
+  button.small { padding: 6px 10px; font-size: 12.5px; border-radius: 8px; }
+  button.dl { background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.4); color: #9af0cd; }
+  button.dl:hover { background: rgba(52,211,153,.2); }
+
+  .dropzone {
+    border: 2px dashed #33405a; border-radius: 18px; padding: 34px 20px; text-align: center;
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+    transition: .2s; cursor: pointer; position: relative; overflow: hidden;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(109,139,255,.08); }
+  .dropzone .icon { font-size: 40px; line-height: 1; margin-bottom: 10px; }
+  .dropzone .big { font-size: 16px; font-weight: 600; }
+  .dropzone .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .dropzone input { display: none; }
+
+  .banner {
+    margin: 16px 0 0; padding: 12px 16px; border-radius: 12px; font-size: 13px;
+    background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25); color: #f5d78a;
+  }
+
+  .list { margin-top: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line); border-radius: 15px; padding: 16px 18px;
+    animation: in .22s ease;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .name { font-weight: 600; font-size: 14.5px; word-break: break-all; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .pill {
+    flex: none; font-size: 12px; padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+    background: rgba(133,146,168,.14); color: var(--muted); border: 1px solid transparent;
+  }
+  .pill.preparing, .pill.uploading { color: #c7d2fe; background: rgba(109,139,255,.14); border-color: rgba(109,139,255,.3); }
+  .pill.transcribing, .pill.translating { color: #e9d5ff; background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.35); }
+  .pill.done { color: #9af0cd; background: rgba(52,211,153,.14); border-color: rgba(52,211,153,.35); }
+  .pill.error { color: #ffb4b4; background: rgba(248,113,113,.14); border-color: rgba(248,113,113,.35); }
+
+  .bar { height: 8px; background: #0e1420; border-radius: 999px; overflow: hidden; margin-top: 14px; }
+  .bar > i { display: block; height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s; }
+  .bar.done > i { background: linear-gradient(90deg, #34d399, #10b981); }
+  .bar.error > i { background: linear-gradient(90deg, #f87171, #ef4444); }
+
+  .msg { margin-top: 9px; color: var(--muted); font-size: 12.5px; min-height: 17px; word-break: break-word; }
+  .row { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 13px; }
+  .logs {
+    margin-top: 12px; display: none; background: #0a0e17; border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; max-height: 190px; overflow: auto;
+    font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; color: #9aa7bd; white-space: pre-wrap;
+  }
+  .logs.show { display: block; }
+  .empty { text-align: center; color: var(--muted); font-size: 13.5px; padding: 30px 0; }
+  footer { margin-top: 30px; color: #566178; font-size: 12px; text-align: center; line-height: 1.7; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>视频<span>字幕生成器</span></h1>
+      <div class="sub">拖入视频 → 自动生成日语字幕与英文字幕 → 直接下载 SRT</div>
+    </div>
+    <div class="top-actions">
+      <button class="ghost small" id="cleanupBtn" title="删除已完成任务的临时文件">清理已完成</button>
+    </div>
+  </header>
+
+  <div class="dropzone" id="dropzone">
+    <div class="icon">🎬</div>
+    <div class="big">把视频拖到这里，或点击选择文件</div>
+    <div class="hint">支持 mp4 / mkv / mov / avi / webm 等，可一次拖多个</div>
+    <input type="file" id="fileInput" multiple accept="video/*,.mkv,.ts,.m2ts,.rmvb" />
+  </div>
+
+  <div class="banner">
+    首次运行会自动下载转录工具（约 1～2GB）；若本机 HF 缓存里已有 large-v3 模型会直接复用，否则下载模型约 3GB。CPU 模式较慢，请耐心等待。
+  </div>
+
+  <div class="list" id="list">
+    <div class="empty" id="empty">还没有任务。拖一个视频进来试试 👆</div>
+  </div>
+
+  <footer>
+    本地运行，视频不会上传到互联网 · 服务关掉后任务列表会清空<br/>
+    输出位置：D:\Codes\subtitle-webapp\work\&lt;任务&gt;\Subtitles_*\Japanese 与 English
+  </footer>
+</div>
+
+<script>
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const cleanupBtn = document.getElementById('cleanupBtn');
+
+const items = new Map();   // id -> item
+let seq = 0;
+
+function fmtSize(n) {
+  if (!n) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 10 ? 0 : 1) + ' ' + u[i];
+}
+function pillText(state) {
+  return ({
+    uploading: '上传中', uploaded: '已上传', preparing: '准备工具',
+    transcribing: '生成日语', translating: '生成英文',
+    done: '完成', error: '失败', canceled: '已取消'
+  })[state] || state;
+}
+
+function createCard(item) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="card-head">
+      <div>
+        <div class="name"></div>
+        <div class="meta"></div>
+      </div>
+      <div class="pill"></div>
+    </div>
+    <div class="bar"><i></i></div>
+    <div class="msg"></div>
+    <div class="row"></div>
+    <div class="logs"></div>
+  `;
+  item.el = card;
+  item.$name = card.querySelector('.name');
+  item.$meta = card.querySelector('.meta');
+  item.$pill = card.querySelector('.pill');
+  item.$bar = card.querySelector('.bar');
+  item.$fill = card.querySelector('.bar > i');
+  item.$msg = card.querySelector('.msg');
+  item.$row = card.querySelector('.row');
+  item.$logs = card.querySelector('.logs');
+  item.$name.textContent = item.name;
+  item.$meta.textContent = fmtSize(item.size);
+  listEl.appendChild(card);
+  updateCard(item);
+  return card;
+}
+
+function updateCard(item) {
+  if (!item.el) return;
+  const st = item.state || 'uploading';
+  item.$pill.textContent = pillText(st);
+  item.$pill.className = 'pill ' + st;
+  item.$bar.className = 'bar ' + (st === 'done' ? 'done' : st === 'error' ? 'error' : '');
+  const p = Math.max(0, Math.min(100, item.progress || 0));
+  item.$fill.style.width = p + '%';
+  item.$msg.textContent = item.message || '';
+  item.$meta.textContent = fmtSize(item.size) + (item.elapsed ? ' · 已用 ' + item.elapsed + 's' : '');
+
+  // 按钮区
+  item.$row.innerHTML = '';
+  if (item.jobId) {
+    if (item.jaReady) {
+      item.$row.appendChild(btn('⬇ 日语字幕', 'dl', () => download(item, 'ja')));
+    }
+    if (item.enReady) {
+      item.$row.appendChild(btn('⬇ 英文字幕', 'dl', () => download(item, 'en')));
+    }
+    if (item.jaReady || item.enReady) {
+      item.$row.appendChild(btn('📂 打开文件夹', 'small', () => openFolder(item)));
+    }
+    if (['preparing','transcribing','translating','uploading'].includes(st)) {
+      item.$row.appendChild(btn('取消', 'small', () => cancel(item)));
+    }
+    if (item.logs && item.logs.length) {
+      item.$row.appendChild(btn('日志', 'small', () => item.$logs.classList.toggle('show')));
+    }
+  }
+  if (item.logs) item.$logs.textContent = item.logs.slice(-100).join('\n');
+}
+
+function btn(text, cls, onClick) {
+  const b = document.createElement('button');
+  b.className = cls; b.textContent = text; b.onclick = onClick;
+  return b;
+}
+function download(item, lang) {
+  window.location.href = `/api/download?job=${encodeURIComponent(item.jobId)}&lang=${lang}`;
+}
+async function openFolder(item) {
+  await fetch(`/api/open?job=${encodeURIComponent(item.jobId)}`);
+}
+async function cancel(item) {
+  await fetch('/api/cancel', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ jobId: item.jobId }) });
+}
+
+function addFiles(files) {
+  const list = Array.from(files).filter(f => f && f.size > 0);
+  if (!list.length) return;
+  emptyEl.style.display = 'none';
+  for (const file of list) {
+    const item = {
+      key: 'k' + (++seq), jobId: null, file,
+      name: file.name, size: file.size,
+      state: 'uploading', progress: 0, message: '准备上传…',
+      logs: [], jaReady: false, enReady: false, elapsed: 0,
+      startedAt: Date.now()
+    };
+    items.set(item.key, item);
+    createCard(item);
+    uploadItem(item);
+  }
+}
+
+function uploadItem(item) {
+  const xhr = new XMLHttpRequest();
+  item.xhr = xhr;
+  xhr.open('POST', '/api/upload?name=' + encodeURIComponent(item.name));
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      item.progress = Math.round(e.loaded / e.total * 88);
+      item.message = `上传中… ${fmtSize(e.loaded)} / ${fmtSize(e.total)}`;
+      updateCard(item);
+    }
+  };
+  xhr.onload = () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      let res = {};
+      try { res = JSON.parse(xhr.responseText); } catch (e) {}
+      item.jobId = res.jobId;
+      item.state = 'uploaded';
+      item.progress = 0;
+      item.message = '上传完成，开始生成…';
+      updateCard(item);
+      saveJobs();
+      fetch('/api/start', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ jobId: item.jobId })
+      });
+    } else {
+      fail(item, '上传失败（' + xhr.status + '）');
+    }
+  };
+  xhr.onerror = () => fail(item, '上传失败：网络错误');
+  xhr.send(item.file);
+}
+
+function fail(item, msg) {
+  item.state = 'error';
+  item.message = msg;
+  item.error = msg;
+  updateCard(item);
+}
+
+function applyStatus(item, s) {
+  item.state = s.state;
+  item.progress = s.progress;
+  item.message = s.message;
+  item.logs = s.logs || item.logs;
+  item.jaReady = s.jaReady;
+  item.enReady = s.enReady;
+  item.elapsed = s.elapsed || 0;
+  item.error = s.error;
+  updateCard(item);
+  if (s.state === 'done' || s.state === 'error') saveJobs();
+}
+
+async function poll() {
+  for (const item of items.values()) {
+    if (!item.jobId) continue;
+    if (item.state === 'done' || item.state === 'error') continue;
+    try {
+      const r = await fetch('/api/status?job=' + encodeURIComponent(item.jobId), { cache: 'no-store' });
+      if (r.ok) applyStatus(item, await r.json());
+      else if (r.status === 404) { item.state = 'error'; item.message = '任务已失效（服务重启过）'; updateCard(item); }
+    } catch (e) { /* ignore */ }
+  }
+}
+setInterval(poll, 1200);
+
+// 刷新页面后恢复历史任务
+function saveJobs() {
+  const arr = [];
+  for (const it of items.values()) {
+    if (it.jobId) arr.push({ id: it.jobId, name: it.name, size: it.size, state: it.state });
+  }
+  localStorage.setItem('subtitleJobs', JSON.stringify(arr.slice(-30)));
+}
+async function restoreJobs() {
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem('subtitleJobs') || '[]'); } catch (e) {}
+  for (const j of arr) {
+    try {
+      const r = await fetch('/api/status?job=' + encodeURIComponent(j.id), { cache: 'no-store' });
+      if (!r.ok) continue;
+      const s = await r.json();
+      const item = {
+        key: 'r' + (++seq), jobId: j.id, file: null,
+        name: s.name, size: s.size, state: s.state, progress: s.progress,
+        message: s.message, logs: s.logs || [], jaReady: s.jaReady,
+        enReady: s.enReady, elapsed: s.elapsed || 0, startedAt: Date.now()
+      };
+      items.set(item.key, item);
+      emptyEl.style.display = 'none';
+      createCard(item);
+    } catch (e) {}
+  }
+}
+
+// 拖拽
+['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dropzone.classList.add('drag');
+}));
+['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('drag');
+}));
+dropzone.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+dropzone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { addFiles(e.target.files); fileInput.value = ''; });
+
+// 整个页面也能拖
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.target.closest('#dropzone')) return;
+  addFiles(e.dataTransfer.files);
+});
+
+cleanupBtn.addEventListener('click', async () => {
+  if (!confirm('删除所有已完成/失败任务的临时文件？字幕文件也会被删除。')) return;
+  await fetch('/api/cleanup', { method: 'POST' });
+  localStorage.removeItem('subtitleJobs');
+  location.reload();
+});
+
+restoreJobs();
+</script>
+</body>
+</html>

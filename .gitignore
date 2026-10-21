@@ -1,0 +1,18 @@
+# 运行时临时文件（上传的视频、生成的字幕）
+work/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 本地日志
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 下载的工具包（若手动放到项目里）
+*.7z
+7zr.exe
