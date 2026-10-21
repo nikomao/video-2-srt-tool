@@ -2202,13 +2202,46 @@ def build_vertical_fc(mode, cw, ch, cx, cy, idx=0):
         )
     if mode == "magazine":
         punch = idx % 2 == 1
-        fg_w = 1040 if punch else 1000
-        fg_h = _even(fg_w / aspect)
-        if fg_h > 860:
-            fg_h = 860
-            fg_w = _even(fg_h * aspect)
-        y = 600 + max(0, (760 - fg_h) // 2)
-        x = (1080 - fg_w) // 2
+        wide = aspect >= 1.5
+        if wide:
+            fg_w = 1080
+            fg_h = _even(fg_w / aspect)
+            if fg_h > 760:
+                fg_h = 760
+                fg_w = _even(fg_h * aspect)
+            x = (1080 - fg_w) // 2
+            y = 660
+            if punch:
+                zw, zh = _even(fg_w * 1.045), _even(fg_h * 1.045)
+                fg_chain = (
+                    f"[fg]scale={zw}:{zh}:flags=lanczos,crop={fg_w}:{fg_h},"
+                    f"unsharp=5:5:0.55:5:5:0.0,cas=0.32[fg2];"
+                )
+            else:
+                fg_chain = (
+                    f"[fg]scale={fg_w}:{fg_h}:flags=lanczos,"
+                    f"unsharp=5:5:0.55:5:5:0.0,cas=0.32[fg2];"
+                )
+            border = (
+                f"drawbox=x={x + 2}:y={y + 2}:w={fg_w - 4}:h={fg_h - 4}:"
+                f"color=white@0.18:t=2"
+            )
+        else:
+            fg_w = 1040 if punch else 1000
+            fg_h = _even(fg_w / aspect)
+            if fg_h > 860:
+                fg_h = 860
+                fg_w = _even(fg_h * aspect)
+            y = 600 + max(0, (760 - fg_h) // 2)
+            x = (1080 - fg_w) // 2
+            fg_chain = (
+                f"[fg]scale={fg_w}:{fg_h}:flags=lanczos,"
+                f"unsharp=5:5:0.55:5:5:0.0,cas=0.32[fg2];"
+            )
+            border = (
+                f"drawbox=x={x}:y={y}:w={fg_w}:h={fg_h}:"
+                f"color=white@0.22:t=4"
+            )
         sh_x = max(0, x - 8)
         sh_y = max(0, y - 8)
         sh_w = min(1080 - sh_x, fg_w + 16)
@@ -2219,13 +2252,12 @@ def build_vertical_fc(mode, cw, ch, cx, cy, idx=0):
             f"[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920,gblur=sigma=36,"
             f"eq=brightness=-0.22:saturation=1.14,vignette=PI/6[bg2];"
-            f"[bg2]drawbox=x=0:y=0:w=1080:h=540:color=black@0.16:t=fill,"
-            f"drawbox=x=0:y=1500:w=1080:h=420:color=black@0.20:t=fill,"
+            f"[bg2]drawbox=x=0:y=0:w=1080:h=640:color=black@0.16:t=fill,"
+            f"drawbox=x=0:y=1400:w=1080:h=520:color=black@0.20:t=fill,"
             f"drawbox=x={sh_x}:y={sh_y}:w={sh_w}:h={sh_h}:color=black@0.38:t=fill[bg3];"
-            f"[fg]scale={fg_w}:{fg_h}:flags=lanczos,"
-            f"unsharp=5:5:0.55:5:5:0.0,cas=0.32[fg2];"
+            f"{fg_chain}"
             f"[bg3][fg2]overlay={x}:{y}[base];"
-            f"[base]drawbox=x={x}:y={y}:w={fg_w}:h={fg_h}:color=white@0.22:t=4,"
+            f"[base]{border},"
             f"drawbox=x=60:y=150:w=140:h=6:color=0xFFD54A@0.95:t=fill"
             f"{flash},fps=30,format=yuv420p[v]"
         )
@@ -2241,7 +2273,6 @@ def run_ai_edit(job, clips, options):
         job["aiEditMessage"] = "准备剪辑…"
         job["aiEditError"] = None
         job["aiEditOutput"] = None
-        job["aiEditPlan"] = clips
         persist_history()
 
         video = Path(job["path"])
