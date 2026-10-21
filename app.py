@@ -1879,7 +1879,7 @@ def seconds_to_srt(t):
 
 
 def ai_plan_clips(job, instruction, max_clips, clip_length):
-    path = job.get("sub") or job.get("raw")
+    path = job.get("reviewed") or job.get("sub") or job.get("raw")
     if not path:
         raise RuntimeError("还没有字幕，请先转录")
     cues = parse_srt(read_text(Path(path)))
@@ -1932,7 +1932,7 @@ def ai_plan_clips(job, instruction, max_clips, clip_length):
 
 
 def write_cut_srt(job, clips, out_path):
-    cues = parse_srt(read_text(Path(job.get("sub") or job.get("raw"))))
+    cues = parse_srt(read_text(Path(job.get("reviewed") or job.get("sub") or job.get("raw"))))
     out = []
     offset = 0.0
     idx = 1
