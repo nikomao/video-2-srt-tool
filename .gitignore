@@ -10,6 +10,9 @@ __pycache__/
 # 本地配置（含 DeepSeek API Key，切勿提交）
 config.json
 
+# 运行时历史记录
+history.json
+
 # 编辑器 / 系统
 .vscode/
 .idea/

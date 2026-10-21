@@ -39,6 +39,7 @@ APP_DIR = Path(__file__).resolve().parent
 WORK_DIR = APP_DIR / "work"
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DIR / "config.json"
+HISTORY_PATH = APP_DIR / "history.json"
 
 LOCALAPPDATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
 TOOL_DIR = LOCALAPPDATA / "AnimeSubtitleTools"
@@ -84,6 +85,15 @@ MODELS = {
     "base":     {"label": "base · 极速",        "vram": 800},
 }
 
+PLATFORMS = {
+    "youtube": "YouTube",
+    "tiktok": "TikTok",
+    "instagram": "Instagram Reels",
+    "x": "X (Twitter)",
+    "facebook": "Facebook",
+    "bilibili": "Bilibili",
+}
+
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 _ENV_CACHE = {"ts": 0.0, "data": None}
@@ -118,12 +128,16 @@ def add_log(job, line):
 
 
 def set_state(job, state, message=None, progress=None):
+    changed = False
     with JOBS_LOCK:
+        changed = job.get("state") != state
         job["state"] = state
         if message is not None:
             job["message"] = message
         if progress is not None:
             job["progress"] = progress
+    if changed:
+        persist_history()
 
 
 def load_config():
@@ -326,10 +340,22 @@ def recommend_model(pref="balanced"):
 
 
 # ---------------------------------------------------------------- 下载 / 工具
-def download_file(url, dest: Path, job):
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    add_log(job, f"下载: {url}")
+def download_sources(url):
+    """GitHub 直连在国内很慢，优先走加速镜像。"""
+    sources = []
+    if "github.com/" in url and "/releases/download/" in url:
+        sources.append("https://gh-proxy.com/" + url)
+        sources.append("https://ghfast.top/" + url)
+    sources.append(url)
+    seen, out = set(), []
+    for s in sources:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _download_one(url, tmp: Path, job):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=90) as r, open(tmp, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
@@ -350,7 +376,29 @@ def download_file(url, dest: Path, job):
                     job["progress"] = min(90, pct)
                 else:
                     job["message"] = f"下载中… {got // 1048576} MB"
-    os.replace(tmp, dest)
+        if total and got < total:
+            raise RuntimeError(f"文件不完整 {got}/{total}")
+
+
+def download_file(url, dest: Path, job):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    last_err = None
+    for src in download_sources(url):
+        try:
+            add_log(job, f"下载源: {src}")
+            _download_one(src, tmp, job)
+            os.replace(tmp, dest)
+            add_log(job, f"下载完成: {dest.name}")
+            return
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            add_log(job, f"该下载源失败：{e}，尝试下一个…")
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    raise RuntimeError(f"下载失败：{last_err}")
 
 
 def ensure_tool(job):
@@ -376,7 +424,9 @@ def ensure_tool(job):
 
 
 def seed_model(job, model):
-    target = MODEL_DIR / model
+    # faster-whisper-xxl 期望的目录名形如 faster-whisper-large-v3
+    repo = "faster-whisper-large-v3" if model == "large-v3" else f"faster-whisper-{model}"
+    target = MODEL_DIR / repo
     if (target / "model.bin").exists():
         return
     snapshots = (Path.home() / ".cache" / "huggingface" / "hub"
@@ -785,11 +835,13 @@ def new_job(name):
         "logs": [], "error": None, "raw": None, "sub": None, "reviewed": None,
         "reviewState": "idle", "reviewProgress": 0, "reviewMessage": "",
         "reviewReport": None, "reviewError": None, "detectedLang": None,
+        "publish": None, "publishState": "idle", "publishMessage": "", "publishError": None,
         "dir": d, "created": time.time(), "started": None, "proc": None,
         "params": None, "exe": None,
     }
     with JOBS_LOCK:
         JOBS[jid] = job
+    persist_history()
     return job
 
 
@@ -810,8 +862,179 @@ def job_public(job):
         "reviewError": job.get("reviewError"),
         "detectedLang": job.get("detectedLang"),
         "params": job.get("params"),
+        "created": job.get("created"),
+        "path": job.get("path"),
+        "publish": job.get("publish"),
+        "publishState": job.get("publishState", "idle"),
+        "publishMessage": job.get("publishMessage", ""),
+        "publishError": job.get("publishError"),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
     }
+
+
+# ---------------------------------------------------------------- 历史 / 发布文案
+def _job_to_record(job):
+    return {
+        "id": job["id"], "name": job["name"], "size": job.get("size", 0),
+        "state": job["state"], "message": job.get("message", ""),
+        "progress": job.get("progress", 0), "created": job.get("created"),
+        "started": job.get("started"), "path": job.get("path"),
+        "params": job.get("params"), "detectedLang": job.get("detectedLang"),
+        "raw": job.get("raw"), "sub": job.get("sub"), "reviewed": job.get("reviewed"),
+        "reviewState": job.get("reviewState", "idle"),
+        "reviewProgress": job.get("reviewProgress", 0),
+        "reviewMessage": job.get("reviewMessage", ""),
+        "reviewReport": job.get("reviewReport"), "reviewError": job.get("reviewError"),
+        "publish": job.get("publish"), "publishState": job.get("publishState", "idle"),
+        "publishMessage": job.get("publishMessage", ""), "publishError": job.get("publishError"),
+        "dir": str(job["dir"]),
+    }
+
+
+def persist_history():
+    with JOBS_LOCK:
+        records = [_job_to_record(j) for j in sorted(
+            JOBS.values(), key=lambda x: x.get("created") or 0, reverse=True)]
+    tmp = HISTORY_PATH.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, HISTORY_PATH)
+    except OSError:
+        pass
+
+
+def _pick_outputs(folder: Path):
+    srts = [s for s in folder.rglob("*.srt") if s.is_file()]
+    if not srts:
+        return None, None, None
+    reviewed = [s for s in srts if "review" in str(s).lower()]
+    others = [s for s in srts if s not in reviewed]
+    subs = [s for s in others if "Subtitles" in s.parts]
+    raws = [s for s in others if "Source" in s.parts]
+    sub = subs[-1] if subs else (others[-1] if others else None)
+    raw = raws[-1] if raws else None
+    rev = reviewed[-1] if reviewed else None
+    return (str(raw) if raw else None, str(sub) if sub else None, str(rev) if rev else None)
+
+
+def load_history():
+    records = []
+    if HISTORY_PATH.exists():
+        try:
+            records = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                records = []
+        except Exception:
+            records = []
+    known = {r.get("id") for r in records if r.get("id")}
+
+    # 扫描 work 目录，找回没有被记录的任务（重启后文件不会“消失”）
+    if WORK_DIR.exists():
+        for d in WORK_DIR.iterdir():
+            if not d.is_dir() or d.name in known:
+                continue
+            vids = [f for f in d.iterdir()
+                    if f.is_file() and f.suffix.lower() in VIDEO_EXT]
+            video = max(vids, key=lambda f: f.stat().st_size) if vids else None
+            raw, sub, rev = _pick_outputs(d)
+            name = video.name if video else (Path(sub).name if sub else d.name)
+            records.append({
+                "id": d.name, "name": name,
+                "size": video.stat().st_size if video else 0,
+                "state": "done" if sub else "interrupted",
+                "message": "已从磁盘恢复" if sub else "服务重启，任务中断（可继续生成）",
+                "progress": 100 if sub else 0,
+                "created": d.stat().st_mtime,
+                "started": None, "path": str(video) if video else None,
+                "params": None, "detectedLang": None,
+                "raw": raw, "sub": sub, "reviewed": rev,
+                "reviewState": "idle", "reviewProgress": 0, "reviewMessage": "",
+                "reviewReport": None, "reviewError": None,
+                "publish": None, "publishState": "idle",
+                "publishMessage": "", "publishError": None,
+                "dir": str(d),
+            })
+
+    for r in records:
+        jid = r.get("id")
+        if not jid or jid in JOBS:
+            continue
+        state = r.get("state", "done")
+        if state in ("preparing", "transcribing", "translating", "uploading"):
+            state = "interrupted"
+        JOBS[jid] = {
+            "id": jid, "name": r.get("name", "video"), "path": r.get("path"),
+            "size": r.get("size", 0), "state": state,
+            "message": r.get("message", ""), "progress": r.get("progress", 0),
+            "logs": [], "error": r.get("error"),
+            "raw": r.get("raw"), "sub": r.get("sub"), "reviewed": r.get("reviewed"),
+            "reviewState": r.get("reviewState", "idle"),
+            "reviewProgress": r.get("reviewProgress", 0),
+            "reviewMessage": r.get("reviewMessage", ""),
+            "reviewReport": r.get("reviewReport"), "reviewError": r.get("reviewError"),
+            "publish": r.get("publish"), "publishState": r.get("publishState", "idle"),
+            "publishMessage": r.get("publishMessage", ""), "publishError": r.get("publishError"),
+            "detectedLang": r.get("detectedLang"),
+            "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
+            "created": r.get("created") or time.time(), "started": r.get("started"),
+            "proc": None, "params": r.get("params"), "exe": None,
+        }
+
+    persist_history()
+
+
+def run_publish(job, api_key, platforms):
+    try:
+        job["publishState"] = "running"
+        job["publishMessage"] = "正在分析字幕并生成文案…"
+        job["publishError"] = None
+        path = job.get("sub") or job.get("raw")
+        if not path:
+            raise RuntimeError("没有可用的字幕")
+        cues = parse_srt(read_text(Path(path)))
+        transcript = "\n".join(c["text"] for c in cues)
+        if not transcript.strip():
+            raise RuntimeError("字幕内容为空")
+        transcript = transcript[:30000]
+        names = "、".join(PLATFORMS.get(p, p) for p in platforms)
+        system = "你是资深海外视频平台运营，只输出 JSON，不要输出解释。"
+        user = (
+            f"根据下面的字幕内容，为这些平台生成英文标题和简介：{names}。\n"
+            "要求：\n"
+            "- YouTube：标题 ≤100 字符；简介 2-4 句 + 5-10 个 hashtag；不要编造时间点\n"
+            "- TikTok：caption ≤150 字符，带 5 个 hashtag，口语化、有钩子\n"
+            "- Instagram Reels：caption ≤300 字符，带 8 个 hashtag\n"
+            "- X (Twitter)：≤280 字符（含 hashtag），一句话抓眼球\n"
+            "- Facebook：标题 ≤100 字符；简介 2-3 句 + hashtag\n"
+            "- Bilibili：标题 ≤80 字符；简介 2-3 句 + hashtag\n"
+            "风格：抓眼球、有悬念或情绪、符合各平台习惯；不要夸大或编造事实。\n"
+            '返回严格 JSON：{"youtube":{"title":"","description":""},'
+            '"tiktok":{"title":"","description":""},"instagram":{"title":"","description":""},'
+            '"x":{"title":"","description":""},"facebook":{"title":"","description":""},'
+            '"bilibili":{"title":"","description":""}}\n'
+            "TikTok/Instagram/X 的 title 可为空字符串，caption 填在 description。\n"
+            f"字幕内容：\n{transcript}"
+        )
+        raw = deepseek_chat(api_key, system, user, timeout=240)
+        job["publish"] = parse_json_loose(raw)
+        job["publishState"] = "done"
+        job["publishMessage"] = "文案已生成"
+        persist_history()
+    except Exception as e:  # noqa: BLE001
+        job["publishState"] = "error"
+        job["publishError"] = str(e)
+        job["publishMessage"] = "生成失败：" + str(e)
+        add_log(job, "PUBLISH ERROR: " + str(e))
+
+
+def start_publish(job, api_key, platforms):
+    if job.get("publishState") == "running":
+        return False
+    job["publish"] = None
+    job["publishState"] = "running"
+    job["publishMessage"] = "准备生成…"
+    threading.Thread(target=run_publish, args=(job, api_key, platforms), daemon=True).start()
+    return True
 
 
 # ---------------------------------------------------------------- HTTP
@@ -874,6 +1097,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/health":
             return self.send_json(200, {"ok": True, "jobs": len(JOBS)})
+        if path == "/api/jobs":
+            with JOBS_LOCK:
+                jobs = sorted(JOBS.values(), key=lambda j: j["created"], reverse=True)[:20]
+            return self.send_json(200, {"jobs": [job_public(j) for j in jobs]})
+        if path == "/api/history":
+            with JOBS_LOCK:
+                jobs = sorted(JOBS.values(), key=lambda j: j.get("created") or 0, reverse=True)
+            return self.send_json(200, {"jobs": [job_public(j) for j in jobs]})
         if path == "/api/env":
             force = (qs.get("refresh") or ["0"])[0] in ("1", "true")
             env = check_env(force=force)
@@ -943,6 +1174,27 @@ class Handler(BaseHTTPRequestHandler):
             _ENV_CACHE["data"] = None
             return self.send_json(200, {"ok": True, "hasKey": bool(get_deepseek_key())})
 
+        if path == "/api/adopt":
+            dirname = str(data.get("dir", "")).strip()
+            try:
+                target = (WORK_DIR / dirname).resolve()
+                target.relative_to(WORK_DIR.resolve())
+            except Exception:
+                return self.send_json(400, {"error": "非法目录"})
+            if not target.is_dir():
+                return self.send_json(404, {"error": "目录不存在"})
+            vids = [f for f in target.rglob("*")
+                    if f.is_file() and f.suffix.lower() in VIDEO_EXT]
+            if not vids:
+                return self.send_json(404, {"error": "目录里没有视频"})
+            video = max(vids, key=lambda f: f.stat().st_size)
+            job = new_job(video.name)
+            job["path"] = str(video)
+            job["size"] = video.stat().st_size
+            set_state(job, "uploaded", "已接管现有视频，准备开始…", 0)
+            return self.send_json(200, {"jobId": job["id"], "name": video.name,
+                                        "size": job["size"], "reused": True})
+
         if path == "/api/start":
             job = JOBS.get(data.get("jobId", ""))
             if not job:
@@ -950,11 +1202,12 @@ class Handler(BaseHTTPRequestHandler):
             if not job.get("path"):
                 return self.send_json(400, {"error": "视频未上传完成"})
 
-            src = data.get("sourceLang", "auto")
-            tgt = data.get("targetLang", "same")
-            model = data.get("model", "large-v3")
-            device = data.get("device", "cuda")
-            compute = data.get("computeType", "float16")
+            p = job.get("params") or {}
+            src = data.get("sourceLang", p.get("sourceLang", "auto"))
+            tgt = data.get("targetLang", p.get("targetLang", "same"))
+            model = data.get("model", p.get("model", "large-v3"))
+            device = data.get("device", p.get("device", "cuda"))
+            compute = data.get("computeType", p.get("computeType", "float16"))
             if src not in LANGUAGES:
                 return self.send_json(400, {"error": "视频语言无效"})
             if tgt != "same" and tgt not in LANGUAGES:
@@ -1001,6 +1254,41 @@ class Handler(BaseHTTPRequestHandler):
             job["reviewed"] = None
             threading.Thread(target=run_review, args=(job, key), daemon=True).start()
             return self.send_json(200, {"ok": True})
+
+        if path == "/api/history/delete":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            shutil.rmtree(job["dir"], ignore_errors=True)
+            with JOBS_LOCK:
+                JOBS.pop(job["id"], None)
+            persist_history()
+            return self.send_json(200, {"ok": True})
+
+        if path == "/api/history/clear":
+            removed = 0
+            for jid, job in list(JOBS.items()):
+                if job["state"] in ("done", "error", "interrupted"):
+                    shutil.rmtree(job["dir"], ignore_errors=True)
+                    with JOBS_LOCK:
+                        JOBS.pop(jid, None)
+                    removed += 1
+            persist_history()
+            return self.send_json(200, {"ok": True, "removed": removed})
+
+        if path == "/api/publish":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            if not (job.get("sub") or job.get("raw")):
+                return self.send_json(400, {"error": "字幕尚未生成"})
+            key = str(data.get("apiKey", "")).strip() or get_deepseek_key()
+            if not key:
+                return self.send_json(400, {"error": "请先在设置中填写 DeepSeek API Key"})
+            plats = data.get("platforms") or list(PLATFORMS.keys())
+            plats = [p for p in plats if p in PLATFORMS] or list(PLATFORMS.keys())
+            ok = start_publish(job, key, plats)
+            return self.send_json(200, {"ok": ok})
 
         if path == "/api/cleanup":
             removed = 0
@@ -1075,6 +1363,7 @@ def cleanup_old_work(days=7):
 
 def main():
     cleanup_old_work()
+    load_history()
     port = pick_port()
     server = ThreadingHTTPServer((HOST, port), Handler)
     server.daemon_threads = True

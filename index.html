@@ -109,6 +109,13 @@
   .diff .d{border-top:1px dashed var(--line);padding:6px 0}
   .diff .b{color:#ffb4b4;text-decoration:line-through}
   .diff .a{color:#9af0cd}
+  .pub{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px}
+  .pubcard{border:1px solid var(--line);background:#0c1220;border-radius:11px;padding:11px 13px}
+  .pubcard h5{margin:0 0 6px;font-size:12.5px;color:#c7d2fe;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .pubcard .tt{font-weight:600;font-size:13px;margin:4px 0;word-break:break-word}
+  .pubcard .dd{color:var(--muted);font-size:12px;white-space:pre-wrap;word-break:break-word}
+  .copybtn{font-size:11px;padding:3px 8px;border-radius:7px}
+  .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-left:6px}
   footer{margin-top:28px;color:#566178;font-size:12px;text-align:center;line-height:1.7}
   .hidden{display:none!important}
 </style>
@@ -227,6 +234,23 @@
     </div>
   </section>
 
+  <!-- 7 历史记录 -->
+  <section class="panel" data-step="7">
+    <div class="box">
+      <h2>⑦ 历史记录</h2>
+      <div class="desc">所有上传过的视频和生成的字幕都会保存在这里（重启/刷新不丢失）。可直接下载、继续生成、AI 校对、生成平台文案。</div>
+      <div class="nav" style="margin-top:0;margin-bottom:14px">
+        <button class="ghost small" id="refreshHistoryBtn">刷新</button>
+        <button class="ghost small" id="clearHistoryBtn">清空已完成</button>
+      </div>
+      <div id="historyList"><div class="empty">正在加载历史记录…</div></div>
+      <div class="nav">
+        <button class="ghost" data-goto="1">回到环境检查</button>
+        <button class="ghost" data-goto="5">去生成字幕</button>
+      </div>
+    </div>
+  </section>
+
   <footer>
     本地运行 · 视频不会上传到互联网 · 输出位于 D:\Codes\subtitle-webapp\work\&lt;任务&gt;\
   </footer>
@@ -234,7 +258,7 @@
 
 <script>
 const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
-const STEP_NAMES = ['环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕'];
+const STEP_NAMES = ['环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕','历史记录'];
 
 const S = {
   step: 1,
@@ -247,6 +271,7 @@ const S = {
   device: null,
   computeType: null,
   items: new Map(),
+  history: [],
   seq: 0,
 };
 
@@ -272,7 +297,7 @@ function pillText(st){ return ({uploading:'上传中',uploaded:'已上传',prepa
 /* ---------------- 步骤条 ---------------- */
 function buildStepper(){
   stepperEl.innerHTML = '';
-  for (let i=1;i<=6;i++){
+  for (let i=1;i<=7;i++){
     const d=document.createElement('div');
     d.className='stp'; d.dataset.step=i;
     d.innerHTML=`<div class="n">STEP ${i}</div><div class="t">${STEP_NAMES[i-1]}</div>`;
@@ -290,6 +315,7 @@ function go(step){
   });
   if (step===4 && !S.rec) loadRecommendation();
   if (step===6) renderReviewPanel();
+  if (step===7) loadHistory();
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
@@ -590,6 +616,24 @@ async function restoreJobs(){
   }
 }
 
+/* ---------------- 服务端任务同步（重启/刷新后自动恢复）---------------- */
+async function syncServerJobs(){
+  try{
+    const r=await api('/api/jobs');
+    for(const s of (r.jobs||[])){
+      let exists=false;
+      for(const it of S.items.values()){ if(it.jobId===s.id){ exists=true; break; } }
+      if(exists) continue;
+      const item={key:'s'+(++S.seq),jobId:s.id,file:null,name:s.name,size:s.size,state:s.state,
+        progress:s.progress,message:s.message,logs:s.logs||[],subReady:s.subReady,rawReady:s.rawReady,
+        reviewedReady:s.reviewedReady,reviewState:s.reviewState,reviewProgress:s.reviewProgress,
+        reviewMessage:s.reviewMessage,reviewReport:s.reviewReport,elapsed:s.elapsed||0,
+        params:s.params,detectedLang:s.detectedLang};
+      S.items.set(item.key,item); emptyEl.style.display='none'; createCard(item);
+    }
+  }catch(e){}
+}
+
 /* ---------------- 拖拽 ---------------- */
 ['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();dropzone.classList.add('drag');}));
 ['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();dropzone.classList.remove('drag');}));
@@ -599,6 +643,106 @@ fileInput.addEventListener('change',e=>{addFiles(e.target.files);fileInput.value
 window.addEventListener('dragover',e=>e.preventDefault());
 window.addEventListener('drop',e=>{e.preventDefault(); if(e.target.closest('#dropzone'))return; addFiles(e.dataTransfer.files);});
 
+/* ---------------- 7 历史记录 / 平台文案 ---------------- */
+const PLATFORM_NAMES={youtube:'YouTube',tiktok:'TikTok',instagram:'Instagram Reels',x:'X (Twitter)',facebook:'Facebook',bilibili:'Bilibili'};
+
+async function loadHistory(){
+  try{
+    const r=await api('/api/history');
+    S.history=r.jobs||[];
+    renderHistory();
+  }catch(e){}
+}
+function fmtDate(ts){
+  if(!ts) return '';
+  const d=new Date(ts*1000);
+  return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function stateText(st){
+  return ({done:'完成',error:'失败',interrupted:'已中断',transcribing:'转录中',translating:'翻译中',preparing:'准备中',uploaded:'已上传',uploading:'上传中'})[st]||st;
+}
+function renderHistory(){
+  const el=$('#historyList'); if(!el) return;
+  const jobs=S.history||[];
+  if(!jobs.length){ el.innerHTML='<div class="empty">暂无历史记录</div>'; return; }
+  el.innerHTML='';
+  for(const j of jobs) el.appendChild(historyCard(j));
+}
+function historyCard(j){
+  const card=document.createElement('div'); card.className='card';
+  const p=j.params||{};
+  const src=p.sourceLang? (LANGS[p.sourceLang]||p.sourceLang):'';
+  const tgt=p.targetLang? (p.targetLang==='same'?'与视频相同':(LANGS[p.targetLang]||p.targetLang)):'';
+  let html=`
+    <div class="card-head">
+      <div><div class="name">${esc(j.name)}</div>
+        <div class="meta">${fmtDate(j.created)} · ${fmtSize(j.size)}
+          ${src?(' · 视频:'+esc(src)):''}${tgt?(' · 字幕:'+esc(tgt)):''}
+          ${p.model?(' · '+esc(p.model)):''}</div>
+      </div>
+      <div class="pill ${j.state==='done'?'done':(j.state==='error'||j.state==='interrupted')?'error':''}">${stateText(j.state)}</div>
+    </div>`;
+  if(j.reviewState==='running') html+=`<div class="msg">${esc(j.reviewMessage||'AI 校对中…')} (${j.reviewProgress||0}%)</div>`;
+  if(j.reviewReport) html+=`<div class="report"><h4>校对：修改 ${j.reviewReport.changed}/${j.reviewReport.total} 条</h4>${j.reviewReport.notes?`<div class="notes">${esc(j.reviewReport.notes)}</div>`:''}</div>`;
+  if(j.publishState==='running') html+=`<div class="msg">${esc(j.publishMessage||'生成文案中…')}</div>`;
+  if(j.publishState==='error') html+=`<div class="msg" style="color:var(--err)">${esc(j.publishMessage||j.publishError||'生成失败')}</div>`;
+  if(j.publish){
+    html+='<div class="pub">'+Object.keys(PLATFORM_NAMES).map(k=>{
+      const v=j.publish[k]; if(!v) return '';
+      const text=(v.title?v.title+'\n\n':'')+(v.description||'');
+      return `<div class="pubcard"><h5>${PLATFORM_NAMES[k]}<button class="copybtn" data-copy="${esc(text)}">复制</button></h5>
+        ${v.title?`<div class="tt">${esc(v.title)}</div>`:''}
+        <div class="dd">${esc(v.description||'')}</div></div>`;
+    }).join('')+'</div>';
+  }
+  html+='<div class="row"></div>';
+  card.innerHTML=html;
+  const row=card.querySelector('.row');
+  if(j.subReady) row.appendChild(btn('⬇ 字幕','dl small',()=>dlJ(j,'sub')));
+  if(j.rawReady) row.appendChild(btn('⬇ 原语言','small',()=>dlJ(j,'raw')));
+  if(j.reviewedReady) row.appendChild(btn('⬇ 校对版','dl small',()=>dlJ(j,'reviewed')));
+  if(j.path) row.appendChild(btn(j.state==='done'?'重新生成':'继续生成','small',()=>continueJob(j)));
+  if(j.subReady||j.rawReady){
+    row.appendChild(btn('🧠 AI 校对','small',()=>reviewJob(j)));
+    row.appendChild(btn('✍ 生成平台文案','small',()=>publishJob(j)));
+    row.appendChild(btn('📂 文件夹','small',()=>fetch('/api/open?job='+encodeURIComponent(j.id))));
+  }
+  row.appendChild(btn('删除','small danger',()=>deleteJob(j)));
+  card.querySelectorAll('[data-copy]').forEach(b=>{
+    b.onclick=()=>navigator.clipboard.writeText(b.dataset.copy)
+      .then(()=>{b.textContent='已复制';setTimeout(()=>b.textContent='复制',1200);});
+  });
+  return card;
+}
+function dlJ(j,lang){ window.location.href=`/api/download?job=${encodeURIComponent(j.id)}&lang=${lang}`; }
+async function continueJob(j){
+  const p=j.params||{sourceLang:'auto',targetLang:'same',model:'large-v3',device:'cuda',computeType:'float16'};
+  try{
+    await api('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id,...p})});
+    alert('已开始生成，进度可在「⑤ 生成字幕」或本页刷新查看。');
+    loadHistory();
+  }catch(e){ alert('无法开始：'+e.message); }
+}
+async function reviewJob(j){
+  try{ await api('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,800); }
+  catch(e){ alert('无法校对：'+e.message); }
+}
+async function publishJob(j){
+  try{ await api('/api/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})}); setTimeout(loadHistory,800); }
+  catch(e){ alert('无法生成文案：'+e.message+'\n\n请先在「④ 推荐模型」填写 DeepSeek API Key。'); }
+}
+async function deleteJob(j){
+  if(!confirm('删除这条历史记录及其临时文件？')) return;
+  await api('/api/history/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})});
+  loadHistory();
+}
+$('#refreshHistoryBtn').onclick=loadHistory;
+$('#clearHistoryBtn').onclick=async()=>{
+  if(!confirm('清空所有已完成/失败的历史记录和临时文件？')) return;
+  await api('/api/history/clear',{method:'POST'});
+  loadHistory();
+};
+
 /* ---------------- 初始化 ---------------- */
 buildStepper();
 initLang();
@@ -607,6 +751,10 @@ updateSummary();
 loadEnv();
 loadKeyStatus();
 restoreJobs();
+syncServerJobs();
+setInterval(syncServerJobs,5000);
+loadHistory();
+setInterval(loadHistory,5000);
 go(1);
 </script>
 </body>
