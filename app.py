@@ -464,6 +464,19 @@ def first_srt(folder: Path):
     return str(files[0]) if files else None
 
 
+def probe_duration(path) -> float:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+            creationflags=CREATE_NO_WINDOW,
+        ).stdout.strip()
+        return float(out) if out else 0.0
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------- SRT / DeepSeek
 def parse_srt(text):
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -650,6 +663,15 @@ def handle_line(job, line, base, span):
     if m:
         pct = max(0, min(100, int(m.group(1))))
         job["progress"] = min(99, base + int(span * pct / 100))
+    # 从字幕时间轴推算进度： [MM:SS.mmm --> MM:SS.mmm] 或 [HH:MM:SS,mmm --> ...]
+    mt = re.search(r"-->\s*(?:(\d+):)?(\d+):(\d+)[.,](\d+)", line)
+    if mt:
+        h = int(mt.group(1)) if mt.group(1) else 0
+        mm, ss, ms = int(mt.group(2)), int(mt.group(3)), int(mt.group(4))
+        secs = h * 3600 + mm * 60 + ss + ms / 1000
+        dur = job.get("duration") or 0
+        if dur > 0:
+            job["progress"] = min(99, base + int(span * min(1.0, secs / dur)))
     if len(line) < 200:
         job["message"] = line
     d = re.search(r"detected language[:\s]+([A-Za-z][A-Za-z ()_\-]+)", line, re.I)
@@ -680,11 +702,16 @@ def transcribe_cmd(exe, video, source, model, device, compute, task, out_dir):
 def run_transcribe(job, params, task, out_dir, base, span):
     device = params["device"]
     compute = params["computeType"]
-    cmd = transcribe_cmd(job["exe"], job["path"], params["sourceLang"],
+    run_video = job.get("run_path") or job["path"]
+    cmd = transcribe_cmd(job["exe"], run_video, params["sourceLang"],
                          params["model"], device, compute, task, out_dir)
     try:
         run_process(job, cmd, base, span)
     except RuntimeError as e:
+        # 有些情况下工具在退出时崩溃，但字幕其实已经写出来了
+        if first_srt(Path(out_dir)):
+            add_log(job, f"⚠ 转录程序退出异常（{e}），但字幕文件已生成，直接使用。")
+            return
         if device != "cpu":
             add_log(job, f"⚠ GPU 加速失败（{e}），自动回退 CPU / int8 重试…")
             set_state(job, job["state"], "GPU 失败，回退 CPU 重试…")
@@ -693,7 +720,7 @@ def run_transcribe(job, params, task, out_dir, base, span):
                     f.unlink()
                 except OSError:
                     pass
-            cmd = transcribe_cmd(job["exe"], job["path"], params["sourceLang"],
+            cmd = transcribe_cmd(job["exe"], run_video, params["sourceLang"],
                                  params["model"], "cpu", "int8", task, out_dir)
             run_process(job, cmd, base, span)
         else:
@@ -707,6 +734,21 @@ def run_job(job):
         seed_model(job, params["model"])
 
         video = Path(job["path"])
+        # 用纯 ASCII 文件名跑工具：避免全角/日文/空格文件名导致工具写 SRT 时崩溃
+        run_video = video
+        try:
+            if any(ord(ch) > 127 for ch in video.name) or " " in video.name or "[" in video.name:
+                run_video = job["dir"] / ("input" + (video.suffix or ".mp4"))
+                if run_video.exists():
+                    run_video.unlink()
+                try:
+                    os.link(video, run_video)
+                except OSError:
+                    shutil.copy2(video, run_video)
+        except Exception:
+            run_video = video
+        job["run_path"] = str(run_video)
+
         out = job["dir"] / ("Subtitles_" + now_str())
         raw_dir = out / "Source"
         sub_dir = out / "Subtitles"
@@ -751,10 +793,11 @@ def run_job(job):
             job["sub"] = str(sub_path)
 
         set_state(job, "done", "完成", 100)
-        try:
-            video.unlink()
-        except OSError:
-            pass
+        for p in {video, Path(job.get("run_path") or video)}:
+            try:
+                p.unlink()
+            except OSError:
+                pass
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         add_log(job, "ERROR: " + msg)
@@ -762,6 +805,12 @@ def run_job(job):
         set_state(job, "error", "失败：" + msg)
     finally:
         job["proc"] = None
+        rp = job.get("run_path")
+        if rp and job.get("path") and Path(rp) != Path(job["path"]):
+            try:
+                Path(rp).unlink()
+            except OSError:
+                pass
 
 
 def run_review(job, api_key):
@@ -837,7 +886,7 @@ def new_job(name):
         "reviewReport": None, "reviewError": None, "detectedLang": None,
         "publish": None, "publishState": "idle", "publishMessage": "", "publishError": None,
         "dir": d, "created": time.time(), "started": None, "proc": None,
-        "params": None, "exe": None,
+        "params": None, "exe": None, "duration": 0.0,
     }
     with JOBS_LOCK:
         JOBS[jid] = job
@@ -978,6 +1027,7 @@ def load_history():
             "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
             "created": r.get("created") or time.time(), "started": r.get("started"),
             "proc": None, "params": r.get("params"), "exe": None,
+            "duration": probe_duration(r["path"]) if r.get("path") and Path(r["path"]).exists() else 0.0,
         }
 
     persist_history()
@@ -1333,6 +1383,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "上传中断"})
 
         job["path"] = str(dest)
+        job["duration"] = probe_duration(dest)
         set_state(job, "uploaded", "上传完成，准备开始…", 0)
         return self.send_json(200, {"jobId": job["id"], "name": name, "size": length})
 
@@ -1361,7 +1412,17 @@ def cleanup_old_work(days=7):
             pass
 
 
+def kill_orphan_workers():
+    """上次应用被强杀时，转录子进程可能残留；启动时清理，避免抢 GPU。"""
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "faster-whisper-xxl.exe"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+
 def main():
+    kill_orphan_workers()
     cleanup_old_work()
     load_history()
     port = pick_port()

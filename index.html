@@ -305,7 +305,22 @@ function buildStepper(){
     stepperEl.appendChild(d);
   }
 }
+function hasAnySubtitle(){
+  for(const it of S.items.values()) if(it.subReady||it.rawReady) return true;
+  for(const j of (S.history||[])) if(j.subReady||j.rawReady) return true;
+  return false;
+}
+function updateNextButtons(){
+  const b=$('#to6'); if(!b) return;
+  const ok=hasAnySubtitle();
+  b.disabled=!ok;
+  b.textContent=ok?'下一步：检查字幕':'下一步：检查字幕（需先生成）';
+}
 function go(step){
+  if(step===6 && !hasAnySubtitle()){
+    alert('还没有生成完成的字幕哦。\n请先在「⑤ 生成字幕」拖入视频，等字幕生成完成后再进入校对。');
+    return;
+  }
   S.step = step;
   document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', +p.dataset.step===step));
   document.querySelectorAll('.stp').forEach(s=>{
@@ -523,6 +538,7 @@ function applyStatus(item,s){
   if(s.detectedLang) item.detectedLang=s.detectedLang;
   updateCard(item);
   if(s.state==='done'||s.state==='error') saveJobs();
+  updateNextButtons();
 }
 async function poll(){
   let reviewDirty=false;
@@ -537,6 +553,7 @@ async function poll(){
     }catch(e){}
   }
   if((S.step===6||reviewDirty)&&document.querySelector('.panel.active')?.dataset.step==='6') renderReviewPanel();
+  updateNextButtons();
 }
 setInterval(poll,1200);
 
@@ -651,6 +668,7 @@ async function loadHistory(){
     const r=await api('/api/history');
     S.history=r.jobs||[];
     renderHistory();
+    updateNextButtons();
   }catch(e){}
 }
 function fmtDate(ts){
@@ -748,6 +766,7 @@ buildStepper();
 initLang();
 document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x.dataset.pref===S.preference));
 updateSummary();
+updateNextButtons();
 loadEnv();
 loadKeyStatus();
 restoreJobs();
