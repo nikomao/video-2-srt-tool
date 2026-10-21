@@ -79,10 +79,11 @@ LANGUAGES = {
 }
 
 MODELS = {
-    "large-v3": {"label": "large-v3 · 质量最佳", "vram": 5000},
-    "medium":   {"label": "medium · 均衡",     "vram": 2500},
-    "small":    {"label": "small · 快速",       "vram": 1500},
-    "base":     {"label": "base · 极速",        "vram": 800},
+    "kotoba-v2.0": {"label": "Kotoba v2.0 · 日语专用（推荐）", "vram": 4000},
+    "large-v3":    {"label": "large-v3 · 多语言最佳",          "vram": 5000},
+    "medium":      {"label": "medium · 均衡",                  "vram": 2500},
+    "small":       {"label": "small · 快速",                    "vram": 1500},
+    "base":        {"label": "base · 极速",                     "vram": 800},
 }
 
 PLATFORMS = {
@@ -292,7 +293,7 @@ def check_env(force=False):
     return data
 
 
-def recommend_model(pref="balanced"):
+def recommend_model(pref="balanced", source="auto"):
     env = check_env()
     gpus = env["gpu"]
     vram = max([g["vram_mb"] for g in gpus], default=0)
@@ -314,6 +315,10 @@ def recommend_model(pref="balanced"):
     if device == "cpu" and pref != "quality" and model == "large-v3":
         model = "medium"
 
+    # 日语内容优先日语专用模型
+    if source == "ja" and pref in ("quality", "balanced"):
+        model = "kotoba-v2.0"
+
     need = MODELS[model]["vram"]
     if vram and vram < need:
         for m in ("medium", "small", "base"):
@@ -329,6 +334,8 @@ def recommend_model(pref="balanced"):
     reason += {"quality": " 已按“质量优先”选择模型。",
                "speed": " 已按“速度优先”选择模型。",
                "balanced": " 已按“均衡”选择模型。"}.get(pref, "")
+    if source == "ja":
+        reason += " 日语内容优先使用 Kotoba-Whisper v2.0（日语专用微调）。"
 
     return {
         "model": model,
@@ -680,7 +687,8 @@ def handle_line(job, line, base, span):
         job["detectedLang"] = d.group(1).strip()
 
 
-def transcribe_cmd(exe, video, source, model, device, compute, task, out_dir):
+def transcribe_cmd(exe, video, source, model, device, compute, task, out_dir,
+                   prompt=None, hotwords=None):
     cmd = [str(exe), str(video)]
     if source and source != "auto":
         cmd += ["--language", source]
@@ -690,13 +698,17 @@ def transcribe_cmd(exe, video, source, model, device, compute, task, out_dir):
         "--device", device,
         "--compute_type", compute,
         "--output_format", "srt",
-        "--beam_size", "5",
+        "--beam_size", "8",
         "--condition_on_previous_text", "False",
         "--vad_filter", "False",
         "--standard",
         "--task", task,
         "--output_dir", str(out_dir),
     ]
+    if prompt:
+        cmd += ["--initial_prompt", prompt]
+    if hotwords:
+        cmd += ["--hotwords", hotwords]
     return cmd
 
 
@@ -705,7 +717,8 @@ def run_transcribe(job, params, task, out_dir, base, span):
     compute = params["computeType"]
     run_video = job.get("run_path") or job["path"]
     cmd = transcribe_cmd(job["exe"], run_video, params["sourceLang"],
-                         params["model"], device, compute, task, out_dir)
+                         params["model"], device, compute, task, out_dir,
+                         params.get("initialPrompt"), params.get("hotwords"))
     try:
         run_process(job, cmd, base, span)
     except RuntimeError as e:
@@ -722,7 +735,8 @@ def run_transcribe(job, params, task, out_dir, base, span):
                 except OSError:
                     pass
             cmd = transcribe_cmd(job["exe"], run_video, params["sourceLang"],
-                                 params["model"], "cpu", "int8", task, out_dir)
+                                 params["model"], "cpu", "int8", task, out_dir,
+                                 params.get("initialPrompt"), params.get("hotwords"))
             run_process(job, cmd, base, span)
         else:
             raise
@@ -733,6 +747,10 @@ def run_job(job):
         params = job["params"]
         job["exe"] = ensure_tool(job)
         seed_model(job, params["model"])
+        if params["model"] == "kotoba-v2.0":
+            kt = MODEL_DIR / "faster-whisper-kotoba-v2.0"
+            if not (kt / "model.bin").exists():
+                raise RuntimeError("Kotoba 日语模型尚未下载完成，请稍后重试，或先切回 large-v3")
 
         video = Path(job["path"])
         # 用纯 ASCII 文件名跑工具：避免全角/日文/空格文件名导致工具写 SRT 时崩溃
@@ -886,7 +904,7 @@ def new_job(name):
         "reviewState": "idle", "reviewProgress": 0, "reviewMessage": "",
         "reviewReport": None, "reviewError": None, "detectedLang": None,
         "publish": None, "publishState": "idle", "publishMessage": "", "publishError": None,
-        "publishProgress": 0,
+        "publishProgress": 0, "publishInstruction": "",
         "dir": d, "created": time.time(), "started": None, "proc": None,
         "params": None, "exe": None, "duration": 0.0,
     }
@@ -920,6 +938,7 @@ def job_public(job):
         "publishMessage": job.get("publishMessage", ""),
         "publishError": job.get("publishError"),
         "publishProgress": job.get("publishProgress", 0),
+        "publishInstruction": job.get("publishInstruction", ""),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
     }
 
@@ -940,6 +959,7 @@ def _job_to_record(job):
         "publish": job.get("publish"), "publishState": job.get("publishState", "idle"),
         "publishMessage": job.get("publishMessage", ""), "publishError": job.get("publishError"),
         "publishProgress": job.get("publishProgress", 0),
+        "publishInstruction": job.get("publishInstruction", ""),
         "dir": str(job["dir"]),
     }
 
@@ -1045,6 +1065,7 @@ def load_history():
             "publish": r.get("publish"), "publishState": publish_state,
             "publishMessage": publish_msg, "publishError": publish_err,
             "publishProgress": r.get("publishProgress", 0),
+            "publishInstruction": r.get("publishInstruction", ""),
             "detectedLang": r.get("detectedLang"),
             "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
             "created": r.get("created") or time.time(), "started": r.get("started"),
@@ -1138,6 +1159,81 @@ def start_publish(job, api_key, platforms):
     job["publishMessage"] = "准备生成…"
     persist_history()
     threading.Thread(target=run_publish, args=(job, api_key, platforms), daemon=True).start()
+    return True
+
+
+def _adjust_platform(api_key, platform, current, instruction, transcript):
+    label = PLATFORMS.get(platform, platform)
+    system = "你是资深海外视频平台运营，只输出 JSON，不要输出解释。"
+    cur_title = (current or {}).get("title", "")
+    cur_desc = (current or {}).get("description", "")
+    user = (
+        f"这是 {label} 当前的英文标题和简介：\n"
+        f"标题：{cur_title}\n简介：{cur_desc}\n\n"
+        f"请根据下面的调整要求重写，保持 {label} 的风格和长度限制：{PUBLISH_LIMITS.get(platform, '')}\n"
+        f"调整要求：{instruction}\n\n"
+        "可以适当参考字幕内容，但不要编造事实。\n"
+        '返回严格 JSON：{"title":"英文标题","description":"英文简介/caption"}\n'
+        f"字幕参考：\n{transcript[:8000]}"
+    )
+    raw = deepseek_chat(api_key, system, user, timeout=180)
+    obj = parse_json_loose(raw)
+    if isinstance(obj, dict) and platform in obj and isinstance(obj[platform], dict):
+        obj = obj[platform]
+    title = str(obj.get("title", "")).strip() if isinstance(obj, dict) else ""
+    desc = str(obj.get("description", "")).strip() if isinstance(obj, dict) else ""
+    if not desc and isinstance(obj, dict):
+        desc = str(obj.get("caption", "")).strip()
+    return {"title": title or cur_title, "description": desc or cur_desc}
+
+
+def run_publish_adjust(job, api_key, platforms, instruction):
+    try:
+        job["publishState"] = "running"
+        job["publishProgress"] = 0
+        job["publishMessage"] = "准备调整…"
+        job["publishError"] = None
+        job["publishInstruction"] = instruction
+        persist_history()
+
+        path = job.get("sub") or job.get("raw")
+        cues = parse_srt(read_text(Path(path))) if path else []
+        transcript = "\n".join(c["text"] for c in cues)[:30000]
+
+        total = len(platforms)
+        result = dict(job.get("publish") or {})
+        for idx, plat in enumerate(platforms, 1):
+            job["publishMessage"] = f"正在调整 {PLATFORMS.get(plat, plat)}（{idx}/{total}）…"
+            job["publishProgress"] = int((idx - 1) * 100 / total)
+            persist_history()
+            result[plat] = _adjust_platform(api_key, plat, result.get(plat), instruction, transcript)
+            job["publish"] = dict(result)
+            job["publishProgress"] = int(idx * 100 / total)
+            persist_history()
+            add_log(job, f"文案已调整: {PLATFORMS.get(plat, plat)}")
+
+        job["publish"] = result
+        job["publishProgress"] = 100
+        job["publishState"] = "done"
+        job["publishMessage"] = f"已调整 {len(platforms)} 个平台文案"
+        persist_history()
+    except Exception as e:  # noqa: BLE001
+        job["publishState"] = "error"
+        job["publishError"] = str(e)
+        job["publishMessage"] = "调整失败：" + str(e)
+        add_log(job, "PUBLISH ADJUST ERROR: " + str(e))
+        persist_history()
+
+
+def start_publish_adjust(job, api_key, platforms, instruction):
+    if job.get("publishState") == "running":
+        return False
+    job["publishState"] = "running"
+    job["publishProgress"] = 0
+    job["publishMessage"] = "准备调整…"
+    persist_history()
+    threading.Thread(target=run_publish_adjust,
+                     args=(job, api_key, platforms, instruction), daemon=True).start()
     return True
 
 
@@ -1265,7 +1361,8 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
 
         if path == "/api/recommend":
-            return self.send_json(200, recommend_model(data.get("preference", "balanced")))
+            return self.send_json(200, recommend_model(
+                data.get("preference", "balanced"), data.get("sourceLang", "auto")))
 
         if path == "/api/config":
             key = str(data.get("deepseekKey", "")).strip()
@@ -1330,6 +1427,8 @@ class Handler(BaseHTTPRequestHandler):
                 "sourceLang": src, "targetLang": tgt, "model": model,
                 "device": device, "computeType": compute,
                 "deepseekKey": key if need_llm else "",
+                "initialPrompt": str(data.get("initialPrompt", p.get("initialPrompt", ""))).strip(),
+                "hotwords": str(data.get("hotwords", p.get("hotwords", ""))).strip(),
             }
             ok = start_job(job)
             return self.send_json(200, {"ok": ok})
@@ -1392,6 +1491,23 @@ class Handler(BaseHTTPRequestHandler):
             plats = data.get("platforms") or list(PLATFORMS.keys())
             plats = [p for p in plats if p in PLATFORMS] or list(PLATFORMS.keys())
             ok = start_publish(job, key, plats)
+            return self.send_json(200, {"ok": ok})
+
+        if path == "/api/publish/adjust":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            if not job.get("publish"):
+                return self.send_json(400, {"error": "请先生成一次文案"})
+            instruction = str(data.get("instruction", "")).strip()
+            if not instruction:
+                return self.send_json(400, {"error": "请输入调整要求"})
+            key = str(data.get("apiKey", "")).strip() or get_deepseek_key()
+            if not key:
+                return self.send_json(400, {"error": "请先在设置中填写 DeepSeek API Key"})
+            plats = data.get("platforms") or list((job.get("publish") or {}).keys())
+            plats = [p for p in plats if p in PLATFORMS] or list(PLATFORMS.keys())
+            ok = start_publish_adjust(job, key, plats, instruction)
             return self.send_json(200, {"ok": ok})
 
         if path == "/api/cleanup":

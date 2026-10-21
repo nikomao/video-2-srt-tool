@@ -120,6 +120,14 @@
   .quick select{background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:7px 10px;font:inherit;font-size:13px;min-width:155px}
   .envchips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
   .boxhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .modal.hidden{display:none!important}
+  .modal-box{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:20px;max-width:580px;width:100%;max-height:90vh;overflow:auto}
+  .modal-box h3{margin:0 0 6px;font-size:17px}
+  .modal-box textarea{width:100%;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 12px;font:inherit;font-size:13px;resize:vertical;margin-top:12px}
+  .modal-box textarea:focus{outline:none;border-color:var(--accent)}
+  .chk{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 10px;cursor:pointer}
+  .chk input{accent-color:var(--accent)}
   .pub{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px}
   .pubcard{border:1px solid var(--line);background:#0c1220;border-radius:11px;padding:11px 13px}
   .pubcard h5{margin:0 0 6px;font-size:12.5px;color:#c7d2fe;display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -230,6 +238,13 @@
       <div class="field" style="margin-top:16px">
         <select id="modelSelect" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
       </div>
+      <div style="margin-top:18px">
+        <div style="font-size:13.5px;font-weight:600">专有名词 / 角色名（可选，强烈推荐）</div>
+        <div class="sub" style="margin-top:4px">填写动画名、角色名、专有名词，可显著减少同音词错误（如 買って/勝って）。</div>
+        <textarea id="hotwordsInput" rows="3" placeholder="例：クレヨンしんちゃん 野原しんのすけ 野原みさえ 野原ひろし 野原ひまわり 風間トオル 桜田ネネ 佐藤マサオ ボーちゃん" style="width:100%;margin-top:8px;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit;font-size:13px;resize:vertical"></textarea>
+        <div class="meta" style="margin-top:5px">会作为 initial_prompt / hotwords 传给模型；留空也可以。</div>
+      </div>
+
       <div style="margin-top:20px;border-top:1px solid var(--line);padding-top:16px">
         <div style="font-size:13.5px;font-weight:600">DeepSeek API Key（可选）</div>
         <div class="sub" style="margin-top:4px">用于「字幕校对」，以及翻译成英语以外的目标语言。仅保存在本机 config.json。</div>
@@ -310,6 +325,21 @@
   </footer>
 </div>
 
+<!-- 文案调整对话框 -->
+<div id="adjustModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>调整平台文案</h3>
+    <div class="sub">告诉 DeepSeek 你想怎么改，例如「更口语化」「标题更短」「突出搞笑感」「加上 #anime」。</div>
+    <textarea id="adjustText" rows="4" placeholder="例如：标题更短更有钩子；简介更口语化；突出三輪車的搞笑剧情；保留 hashtags。"></textarea>
+    <div style="margin-top:14px;font-size:13px;font-weight:600">调整哪些平台</div>
+    <div id="adjustPlatforms" class="grid" style="margin-top:8px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:18px">
+      <button class="ghost" id="adjustCancel">取消</button>
+      <button class="primary" id="adjustSubmit">让 DeepSeek 重新调整</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
 const STEP_NAMES = ['首页','环境检查','视频语言','字幕语言','推荐模型','生成字幕','检查字幕','历史记录'];
@@ -320,6 +350,7 @@ const S = {
   sourceLang: localStorage.getItem('srcLang') || 'auto',
   targetLang: localStorage.getItem('tgtLang') || 'same',
   preference: localStorage.getItem('pref') || 'balanced',
+  hotwords: localStorage.getItem('hotwords') || '',
   rec: null,
   model: null,
   device: null,
@@ -426,7 +457,10 @@ function renderLangGrid(el, selected, includeSame, onPick){
   }
 }
 function initLang(){
-  renderLangGrid($('#srcGrid'), S.sourceLang, false, k=>{ S.sourceLang=k; localStorage.setItem('srcLang',k); updateSummary(); });
+  renderLangGrid($('#srcGrid'), S.sourceLang, false, k=>{
+    S.sourceLang=k; localStorage.setItem('srcLang',k); S.rec=null; S.model=null;
+    updateSummary(); syncHomeControls(); if(S.step===4) loadRecommendation();
+  });
   renderLangGrid($('#tgtGrid'), S.targetLang, true, k=>{ S.targetLang=k; localStorage.setItem('tgtLang',k); updateSummary(); });
   $('#to3').onclick=()=>go(3);
   $('#to4').onclick=()=>{ go(4); loadRecommendation(); };
@@ -436,7 +470,7 @@ function initLang(){
 async function loadRecommendation(){
   if (!S.rec) $('#recBox').innerHTML = '<div class="empty">正在分析硬件…</div>';
   try{
-    const rec = await api('/api/recommend', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preference:S.preference})});
+    const rec = await api('/api/recommend', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preference:S.preference,sourceLang:S.sourceLang})});
     S.rec = rec;
     if (!S.model) S.model = rec.model;
     S.device = rec.device; S.computeType = rec.computeType;
@@ -517,7 +551,7 @@ async function addFiles(files){
     const item={key:'k'+(++S.seq),jobId:null,file,name:file.name,size:file.size,
       state:'uploading',progress:0,message:'准备上传…',logs:[],subReady:false,rawReady:false,
       reviewedReady:false,reviewState:'idle',reviewProgress:0,reviewMessage:'',reviewReport:null,
-      elapsed:0,params:{...{sourceLang:S.sourceLang,targetLang:S.targetLang,model:S.model,device:S.device,computeType:S.computeType}}};
+      elapsed:0,params:{...{sourceLang:S.sourceLang,targetLang:S.targetLang,model:S.model,device:S.device,computeType:S.computeType,initialPrompt:S.hotwords,hotwords:S.hotwords}}};
     S.items.set(item.key,item);
     createCard(item);
     uploadItem(item);
@@ -775,7 +809,8 @@ function renderHomeHistory(){ renderCompactHistory($('#homeHistory'),6); }
 
 /* ---------------- 首页 ---------------- */
 const MODEL_OPTS=[
-  {value:'large-v3',label:'large-v3 · 质量最佳'},
+  {value:'kotoba-v2.0',label:'Kotoba v2.0 · 日语专用（推荐）'},
+  {value:'large-v3',label:'large-v3 · 多语言最佳'},
   {value:'medium',label:'medium · 均衡'},
   {value:'small',label:'small · 快速'},
   {value:'base',label:'base · 极速'},
@@ -789,7 +824,10 @@ function initHome(){
   model.innerHTML=MODEL_OPTS.map(o=>`<option value="${o.value}">${esc(o.label)}</option>`).join('');
   src.value=S.sourceLang; tgt.value=S.targetLang;
   if(S.model) model.value=S.model;
-  src.onchange=()=>{S.sourceLang=src.value;localStorage.setItem('srcLang',src.value);updateSummary();};
+  src.onchange=()=>{
+    S.sourceLang=src.value;localStorage.setItem('srcLang',src.value);
+    S.rec=null;S.model=null;updateSummary();loadRecommendation();
+  };
   tgt.onchange=()=>{S.targetLang=tgt.value;localStorage.setItem('tgtLang',tgt.value);updateSummary();};
   model.onchange=()=>{S.model=model.value;updateSummary();};
   $('#homeHistoryAll').onclick=()=>go(7);
@@ -845,11 +883,12 @@ function historyCard(j){
     html+='<div class="pub">'+Object.keys(PLATFORM_NAMES).map(k=>{
       const v=j.publish[k]; if(!v) return '';
       const text=(v.title?v.title+'\n\n':'')+(v.description||'');
-      return `<div class="pubcard"><h5>${PLATFORM_NAMES[k]}<button class="copybtn" data-copy="${esc(text)}">复制</button></h5>
+      return `<div class="pubcard"><h5>${PLATFORM_NAMES[k]}<span style="display:flex;gap:6px"><button class="copybtn" data-copy="${esc(text)}">复制</button><button class="copybtn" data-adjust="${k}">微调</button></span></h5>
         ${v.title?`<div class="tt">${esc(v.title)}</div>`:''}
         <div class="dd">${esc(v.description||'')}</div></div>`;
     }).join('')+'</div>';
   }
+  if(j.publishInstruction) html+=`<div class="meta" style="margin-top:6px">上次调整：${esc(j.publishInstruction)}</div>`;
   html+='<div class="row"></div>';
   card.innerHTML=html;
   const row=card.querySelector('.row');
@@ -860,6 +899,7 @@ function historyCard(j){
   if(j.subReady||j.rawReady){
     if(j.reviewState!=='running') row.appendChild(btn('🧠 AI 校对','small',()=>reviewJob(j)));
     if(j.publishState!=='running') row.appendChild(btn(j.publish?'✍ 重新生成文案':'✍ 生成平台文案','small',()=>publishJob(j)));
+    if(j.publish && j.publishState!=='running') row.appendChild(btn('🎛 调整文案','small',()=>openAdjust(j)));
     row.appendChild(btn('📂 文件夹','small',()=>fetch('/api/open?job='+encodeURIComponent(j.id))));
   }
   row.appendChild(btn('删除','small danger',()=>deleteJob(j)));
@@ -867,6 +907,7 @@ function historyCard(j){
     b.onclick=()=>navigator.clipboard.writeText(b.dataset.copy)
       .then(()=>{b.textContent='已复制';setTimeout(()=>b.textContent='复制',1200);});
   });
+  card.querySelectorAll('[data-adjust]').forEach(b=>b.onclick=()=>openAdjust(j,[b.dataset.adjust]));
   return card;
 }
 function dlJ(j,lang){ window.location.href=`/api/download?job=${encodeURIComponent(j.id)}&lang=${lang}`; }
@@ -895,6 +936,41 @@ async function deleteJob(j){
   await api('/api/history/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:j.id})});
   loadHistory();
 }
+
+/* ---------------- 文案调整对话框 ---------------- */
+let adjustJob=null;
+function openAdjust(j, platforms){
+  adjustJob=j;
+  $('#adjustText').value='';
+  const el=$('#adjustPlatforms');
+  el.innerHTML=Object.entries(PLATFORM_NAMES).map(([k,v])=>{
+    const checked=!platforms||platforms.includes(k);
+    return `<label class="chk"><input type="checkbox" value="${k}" ${checked?'checked':''}>${esc(v)}</label>`;
+  }).join('');
+  $('#adjustModal').classList.remove('hidden');
+  setTimeout(()=>$('#adjustText').focus(),60);
+}
+function closeAdjust(){ $('#adjustModal').classList.add('hidden'); adjustJob=null; }
+$('#adjustCancel').onclick=closeAdjust;
+$('#adjustModal').onclick=(e)=>{ if(e.target && e.target.id==='adjustModal') closeAdjust(); };
+$('#adjustSubmit').onclick=async()=>{
+  if(!adjustJob) return;
+  const instruction=$('#adjustText').value.trim();
+  if(!instruction){ alert('请输入调整要求'); return; }
+  const platforms=[...document.querySelectorAll('#adjustPlatforms input:checked')].map(x=>x.value);
+  if(!platforms.length){ alert('至少选择一个平台'); return; }
+  const j=adjustJob;
+  j.publishState='running'; j.publishProgress=0; j.publishMessage='准备调整…';
+  closeAdjust(); renderHistory(); renderHomeHistory();
+  try{
+    await api('/api/publish/adjust',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({jobId:j.id,instruction,platforms})});
+    setTimeout(loadHistory,600);
+  }catch(e){
+    j.publishState='idle'; renderHistory();
+    alert('无法调整：'+e.message+'\n\n请先在「④ 推荐模型」配置 DeepSeek API Key。');
+  }
+};
 $('#historyBtn').onclick=()=>go(7);
 $('#openHistoryBtn').onclick=()=>go(7);
 $('#refreshHistoryBtn').onclick=loadHistory;
@@ -908,6 +984,8 @@ $('#clearHistoryBtn').onclick=async()=>{
 buildStepper();
 initLang();
 initHome();
+const hwEl=$('#hotwordsInput');
+if(hwEl){ hwEl.value=S.hotwords; hwEl.oninput=()=>{S.hotwords=hwEl.value;localStorage.setItem('hotwords',hwEl.value);}; }
 document.querySelectorAll('#prefSeg button').forEach(x=>x.classList.toggle('on',x.dataset.pref===S.preference));
 updateSummary();
 updateNextButtons();
