@@ -47,6 +47,31 @@
 
 输出：`video-work\<任务>\optimized\<原名>_<平台>.mp4`
 
+## 模型选择（按语言自动推荐）
+
+应用会根据「视频语言 + 质量/均衡/速度」自动选模型，并说明原因：
+
+| 语言 | 质量优先 | 均衡 | 速度优先 |
+|---|---|---|---|
+| 中文（普通话） | large-v3 | large-v3-turbo | medium |
+| 粤语 | large-v3 | large-v3-turbo | medium |
+| 英语 | large-v3 | distil-large-v3 | small / medium |
+| 日语 | large-v3 | large-v3-turbo | medium |
+| 韩语 | large-v3 | large-v3-turbo | medium |
+| 德语 | large-v3 | large-v3-turbo | medium |
+
+说明：
+
+- **large-v3**：官方多语言质量最佳，中文/粤语/日语/韩语/德语首选
+- **large-v3-turbo**：large-v3 的蒸馏加速版，速度快 6-8 倍，质量略低
+- **distil-large-v3**：英语专用，速度快约 6 倍，英语质量接近 large-v3
+- **medium / small / base / tiny**：逐级更快、质量更低
+- **粤语**：Whisper 对粤语支持有限，建议 large-v3 并填写专有名词
+- **日语**：建议填写作品名/角色名，可显著减少同音词错误（如 買って/勝って）
+
+已下载的模型位于 `%LOCALAPPDATA%\AnimeSubtitleTools\models`，可选：
+`large-v3`、`large-v3-turbo`、`distil-large-v3`、`medium`、`small`、`base`、`tiny`。
+
 ## 启动
 
 - 双击桌面的 **「视频字幕生成器」** 图标，或

@@ -245,6 +245,7 @@
       <div class="field" style="margin-top:16px">
         <select id="modelSelect" style="flex:1;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font:inherit"></select>
       </div>
+      <div class="meta" id="modelDesc" style="margin-top:7px"></div>
       <div style="margin-top:18px">
         <div style="font-size:13.5px;font-weight:600">专有名词 / 角色名（可选，强烈推荐）</div>
         <div class="sub" style="margin-top:4px">填写动画名、角色名、专有名词，可显著减少同音词错误（如 買って/勝って）。</div>
@@ -384,7 +385,7 @@
 </div>
 
 <script>
-const LANGS = {auto:'自动检测',ja:'日语',en:'英语',zh:'中文',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
+const LANGS = {auto:'自动检测',zh:'中文（普通话）',yue:'粤语',en:'英语',ja:'日语',ko:'韩语',fr:'法语',de:'德语',es:'西班牙语',ru:'俄语',pt:'葡萄牙语',it:'意大利语',ar:'阿拉伯语',th:'泰语',vi:'越南语',id:'印尼语'};
 const STEP_NAMES = ['首页','环境','视频语言','字幕语言','模型','生成','校对','历史','平台适配'];
 
 const S = {
@@ -535,12 +536,21 @@ function renderRec(){
     </div>
     <div class="why">${esc(rec.reason)}</div>`;
   const sel=$('#modelSelect'); sel.innerHTML='';
+  let currentDesc='';
   for (const o of rec.options){
-    const op=document.createElement('option'); op.value=o.value; op.textContent=o.label;
-    if (o.value===S.model) op.selected=true;
+    const op=document.createElement('option');
+    op.value=o.value;
+    op.textContent=o.label + (o.installed ? '' : '（下载中/未安装）');
+    op.title=o.desc||'';
+    if (o.value===S.model){ op.selected=true; currentDesc=o.desc||''; }
     sel.appendChild(op);
   }
-  sel.onchange=()=>{ S.model=sel.value; };
+  const md=$('#modelDesc'); if(md) md.textContent=currentDesc;
+  sel.onchange=()=>{
+    S.model=sel.value;
+    const o=(rec.options||[]).find(x=>x.value===S.model);
+    if(md) md.textContent=(o&&o.desc)||'';
+  };
 }
 document.querySelectorAll('#prefSeg button').forEach(b=>{
   b.onclick=()=>{
@@ -852,10 +862,13 @@ function renderHomeHistory(){ renderCompactHistory($('#homeHistory'),6); }
 
 /* ---------------- 首页 ---------------- */
 const MODEL_OPTS=[
-  {value:'large-v3',label:'large-v3 · 多语言最佳'},
-  {value:'medium',label:'medium · 均衡'},
-  {value:'small',label:'small · 快速'},
-  {value:'base',label:'base · 极速'},
+  {value:'large-v3',label:'large-v3 · 多语言质量最佳',desc:'中文/粤语/日语/韩语/德语首选，质量最好，速度较慢'},
+  {value:'large-v3-turbo',label:'large-v3-turbo · 接近 large，速度快 6-8x',desc:'日常批量推荐，质量略低但快很多'},
+  {value:'distil-large-v3',label:'distil-large-v3 · 英语专用',desc:'英语速度快约 6 倍，质量接近 large-v3'},
+  {value:'medium',label:'medium · 均衡',desc:'质量与速度平衡'},
+  {value:'small',label:'small · 快速',desc:'速度快、质量一般'},
+  {value:'base',label:'base · 极速',desc:'极快，质量较低'},
+  {value:'tiny',label:'tiny · 最低配置',desc:'最小最快，质量最低'},
 ];
 function initHome(){
   const src=$('#homeSrc'), tgt=$('#homeTgt'), model=$('#homeModel');

@@ -62,9 +62,10 @@ CREATE_NO_WINDOW = 0x08000000
 
 LANGUAGES = {
     "auto": "自动检测",
-    "ja": "日语",
+    "zh": "中文（普通话）",
+    "yue": "粤语",
     "en": "英语",
-    "zh": "中文",
+    "ja": "日语",
     "ko": "韩语",
     "fr": "法语",
     "de": "德语",
@@ -79,10 +80,48 @@ LANGUAGES = {
 }
 
 MODELS = {
-    "large-v3":    {"label": "large-v3 · 多语言最佳",          "vram": 5000},
-    "medium":      {"label": "medium · 均衡",                  "vram": 2500},
-    "small":       {"label": "small · 快速",                    "vram": 1500},
-    "base":        {"label": "base · 极速",                     "vram": 800},
+    "large-v3": {
+        "label": "large-v3 · 多语言质量最佳",
+        "vram": 5000, "folder": "faster-whisper-large-v3",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "官方多语言最强，中文/粤语/日语/韩语/德语首选；速度较慢。",
+    },
+    "large-v3-turbo": {
+        "label": "large-v3-turbo · 接近 large，速度快 6-8x",
+        "vram": 4000, "folder": "faster-whisper-large-v3-turbo",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "large-v3 的蒸馏加速版，质量略低但快很多，适合日常批量。",
+    },
+    "distil-large-v3": {
+        "label": "distil-large-v3 · 英语专用",
+        "vram": 3500, "folder": "faster-distil-whisper-large-v3",
+        "langs": ["en"],
+        "desc": "英语专用蒸馏模型，速度约快 6 倍，英语质量接近 large-v3。",
+    },
+    "medium": {
+        "label": "medium · 均衡",
+        "vram": 2500, "folder": "faster-whisper-medium",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "质量与速度平衡，CPU 也可用。",
+    },
+    "small": {
+        "label": "small · 快速",
+        "vram": 1500, "folder": "faster-whisper-small",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "速度快、质量一般，适合预览或低配置。",
+    },
+    "base": {
+        "label": "base · 极速",
+        "vram": 800, "folder": "faster-whisper-base",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "极快，质量较低，仅建议快速草稿。",
+    },
+    "tiny": {
+        "label": "tiny · 最低配置",
+        "vram": 500, "folder": "faster-whisper-tiny",
+        "langs": ["zh", "yue", "en", "ja", "ko", "de"],
+        "desc": "最小最快，质量最低。",
+    },
 }
 
 PLATFORMS = {
@@ -357,33 +396,90 @@ def recommend_model(pref="balanced", source="auto"):
     else:
         device, compute = "cpu", "int8"
 
-    if pref == "quality":
-        model = "large-v3"
-    elif pref == "speed":
-        model = "small" if vram < 2000 else "medium"
-    else:
-        model = "large-v3" if vram >= 5000 else ("medium" if vram >= 1500 else "small")
+    multi_langs = ("zh", "yue", "ja", "ko", "de")
 
-    if device == "cpu" and pref != "quality" and model == "large-v3":
+    if source == "en":
+        if pref == "quality":
+            model = "large-v3"
+        elif pref == "speed":
+            model = "small" if vram < 2000 else "medium"
+        else:
+            model = "distil-large-v3"
+    elif source in multi_langs:
+        if pref == "quality":
+            model = "large-v3"
+        elif pref == "speed":
+            model = "small" if vram < 1500 else "medium"
+        else:
+            model = "large-v3-turbo"
+    else:
+        if pref == "quality":
+            model = "large-v3"
+        elif pref == "speed":
+            model = "small" if vram < 1500 else "medium"
+        else:
+            model = "large-v3-turbo"
+
+    if device == "cpu" and pref != "quality" and model in ("large-v3", "large-v3-turbo"):
         model = "medium"
 
     need = MODELS[model]["vram"]
     if vram and vram < need:
-        for m in ("medium", "small", "base"):
+        for m in ("large-v3-turbo", "distil-large-v3", "medium", "small", "base", "tiny"):
             if MODELS[m]["vram"] <= vram:
                 model = m
                 break
 
+    # 模型还没下载完时，按偏好回退到已安装的模型
+    target_model = model
+    if not (MODEL_DIR / MODELS[model]["folder"] / "model.bin").exists():
+        fallback = {
+            "quality": ["large-v3", "large-v3-turbo", "distil-large-v3", "medium", "small", "base", "tiny"],
+            "balanced": ["large-v3-turbo", "large-v3", "distil-large-v3", "medium", "small", "base", "tiny"],
+            "speed": ["small", "base", "tiny", "medium", "large-v3-turbo", "large-v3", "distil-large-v3"],
+        }.get(pref, ["large-v3", "medium", "small", "base", "tiny"])
+        if source == "en":
+            fallback = ["distil-large-v3"] + [m for m in fallback if m != "distil-large-v3"]
+        for m in fallback:
+            if (MODEL_DIR / MODELS[m]["folder"] / "model.bin").exists():
+                model = m
+                break
+
+    lang_names = {"zh": "中文（普通话）", "yue": "粤语", "en": "英语",
+                  "ja": "日语", "ko": "韩语", "de": "德语"}
     if gpus:
         reason = (f'检测到 {gpus[0]["name"]}（{gpus[0]["vram_mb"] / 1024:.1f}GB 显存），'
                   f'可启用 CUDA 加速。')
     else:
-        reason = "未检测到可用 NVIDIA GPU，将使用 CPU（建议选择 medium/small 以控制耗时）。"
-    reason += {"quality": " 已按“质量优先”选择模型。",
-               "speed": " 已按“速度优先”选择模型。",
-               "balanced": " 已按“均衡”选择模型。"}.get(pref, "")
-    if source == "ja":
-        reason += " 建议在「专有名词/角色名」里填写作品名与角色名，可显著减少同音词错误。"
+        reason = "未检测到可用 NVIDIA GPU，将使用 CPU（建议 medium/small 以控制耗时）。"
+
+    if source == "en":
+        if model == "distil-large-v3":
+            reason += " 英语：选择 distil-large-v3（英语专用，速度约快 6 倍，质量接近 large-v3）。"
+        elif model == "large-v3":
+            reason += " 英语：质量优先选 large-v3（官方最强多语言模型）。"
+        else:
+            reason += " 英语：速度优先，选择较小模型。"
+    elif source in multi_langs:
+        if model == "large-v3":
+            reason += f" {lang_names[source]}：选择 large-v3（官方多语言质量最佳）。"
+        elif model == "large-v3-turbo":
+            reason += f" {lang_names[source]}：选择 large-v3-turbo（接近 large 质量，速度快 6-8 倍）。"
+        else:
+            reason += f" {lang_names[source]}：速度优先，选择较小模型。"
+        if source == "yue":
+            reason += " Whisper 对粤语支持有限，建议同时填写专有名词；必要时用 large-v3 复核。"
+        if source == "ja":
+            reason += " 日语建议填写作品名与角色名，可显著减少同音词错误。"
+    else:
+        reason += " 未指定语言：默认选择多语言模型 large-v3 / turbo。"
+
+    if model != target_model:
+        reason += f"（{MODELS[target_model]['label']} 尚未下载完成，暂用 {model}）"
+
+    reason += {"quality": " 已按“质量优先”选择。",
+               "speed": " 已按“速度优先”选择。",
+               "balanced": " 已按“均衡”选择。"}.get(pref, "")
 
     return {
         "model": model,
@@ -391,7 +487,10 @@ def recommend_model(pref="balanced", source="auto"):
         "computeType": compute,
         "reason": reason,
         "preference": pref,
-        "options": [{"value": k, "label": v["label"]} for k, v in MODELS.items()],
+        "options": [{
+            "value": k, "label": v["label"], "desc": v.get("desc", ""),
+            "installed": (MODEL_DIR / v["folder"] / "model.bin").exists(),
+        } for k, v in MODELS.items()],
     }
 
 
@@ -795,6 +894,9 @@ def run_job(job):
         params = job["params"]
         job["exe"] = ensure_tool(job)
         seed_model(job, params["model"])
+        model_folder = MODELS[params["model"]]["folder"]
+        if not (MODEL_DIR / model_folder / "model.bin").exists():
+            raise RuntimeError(f"模型 {params['model']} 尚未下载完成，请稍后重试")
 
         video = Path(job["path"])
         # 用纯 ASCII 文件名跑工具：避免全角/日文/空格文件名导致工具写 SRT 时崩溃
