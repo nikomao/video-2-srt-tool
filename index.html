@@ -422,17 +422,20 @@
         <div class="field">
           <input id="aiInstruction" placeholder="剪辑要求，例如：挑出最搞笑的 3 段，每段 15 秒" />
           <button class="primary" id="aiPlanBtn">AI 选片段</button>
+          <button class="ghost" id="aiQuickBtn">一键精剪 30 秒</button>
         </div>
         <div class="field" style="margin-top:8px">
-          <label class="chk">最多段数 <input id="aiMaxClips" type="number" value="5" style="width:64px;margin-left:6px" /></label>
-          <label class="chk">每段秒数 <input id="aiClipLen" type="number" value="20" style="width:64px;margin-left:6px" /></label>
+          <label class="chk">最多段数 <input id="aiMaxClips" type="number" value="6" style="width:64px;margin-left:6px" /></label>
+          <label class="chk">每段秒数 <input id="aiClipLen" type="number" value="6" style="width:64px;margin-left:6px" /></label>
         </div>
         <div id="aiPlanList" class="list" style="margin-top:12px"></div>
         <div class="row" style="margin-top:12px">
           <label class="chk"><input type="checkbox" id="aiVertical" checked> 竖屏 9:16</label>
           <select id="aiVerticalMode" style="background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:6px 8px;font:inherit;font-size:12px">
+            <option value="magazine" selected>杂志式竖屏（推荐）</option>
+            <option value="blur">模糊背景</option>
+            <option value="crop">裁切填满（满屏）</option>
             <option value="pad">加黑边（保留全画面）</option>
-            <option value="crop">裁切填满（适合手机）</option>
           </select>
           <label class="chk"><input type="checkbox" id="aiRemarks" checked> 加搞笑备注/花字</label>
           <label class="chk"><input type="checkbox" id="aiBurn" checked> 烧字幕</label>
@@ -1300,6 +1303,12 @@ function initAiPanel(){
   drop.addEventListener('click',()=>input.click());
   input.addEventListener('change',e=>{ if(e.target.files[0]) startAiFlow(e.target.files[0]); input.value=''; });
   $('#aiPlanBtn').onclick=aiPlan;
+  $('#aiQuickBtn').onclick=()=>{
+    $('#aiMaxClips').value=6;
+    $('#aiClipLen').value=6;
+    $('#aiInstruction').value='第一段用最搞笑的 3-6 秒做钩子；之后每段 4-6 秒，只保留一个笑点，不要完整对话；最后一段要有反转收尾。花字像弹幕，每条不超过 12 个字。';
+    aiPlan();
+  };
   $('#aiRenderBtn').onclick=aiRender;
 }
 

@@ -1994,8 +1994,23 @@ def _ass_escape(text):
             .replace("\n", "\\N"))
 
 
-def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False):
+def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False, layout=""):
     width, height = (1080, 1920) if vertical else (1920, 1080)
+    magazine = layout == "magazine" and vertical
+    if magazine:
+        styles = [
+            "Style: Sub,Microsoft YaHei,52,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,70,70,150,1",
+            "Style: Remark,Microsoft YaHei,64,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,8,60,60,232,1",
+            "Style: Title,Microsoft YaHei,48,&H00F5F5F5,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,60,60,62,1",
+            "Style: Hook,Microsoft YaHei,86,&H0000FFFF,&H000000FF,&H80000000,&H80000000,-1,0,0,0,100,100,0,0,3,0,0,8,60,60,360,1",
+            "Style: Badge,Microsoft YaHei,28,&H00D8D8D8,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,1,60,60,40,1",
+            "Style: CTA,Microsoft YaHei,28,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,3,60,60,40,1",
+        ]
+    else:
+        styles = [
+            "Style: Sub,Microsoft YaHei,46,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,40,40,56,1",
+            "Style: Remark,Microsoft YaHei,66,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,40,40,90,1",
+        ]
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -2006,15 +2021,15 @@ def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False):
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Sub,Microsoft YaHei,46,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,40,40,56,1",
-        "Style: Remark,Microsoft YaHei,66,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,40,40,90,1",
+    ] + styles + [
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
     if include_subtitles:
-        cues = parse_srt(read_text(Path(job.get("reviewed") or job.get("sub") or job.get("raw"))))
+        src = job.get("reviewed") or job.get("sub") or job.get("raw")
+        cues = parse_srt(read_text(Path(src))) if src else []
         offset = 0.0
         for clip in clips:
             s, e = float(clip["start"]), float(clip["end"])
@@ -2027,27 +2042,194 @@ def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False):
                 ne = min(ce, e) - s + offset
                 if ne - ns < 0.05:
                     continue
+                text = _ass_escape(cue["text"])
+                if magazine:
+                    text = "{\\fad(80,80)}" + text
                 lines.append(
-                    f"Dialogue: 0,{ass_time(ns)},{ass_time(ne)},Sub,,0,0,0,,"
-                    f"{_ass_escape(cue['text'])}"
+                    f"Dialogue: 0,{ass_time(ns)},{ass_time(ne)},Sub,,0,0,0,,{text}"
                 )
             offset += e - s
 
     offset = 0.0
-    for clip in clips:
+    for i, clip in enumerate(clips):
         s, e = float(clip["start"]), float(clip["end"])
-        dur = e - s
+        dur = max(0.0, e - s)
+        items = []
         for r in (clip.get("remarks") or []):
-            rs = offset + max(0.0, float(r.get("offset", 0)))
-            re = min(offset + dur, rs + max(0.8, float(r.get("duration", 2))))
-            if re > rs:
-                lines.append(
-                    f"Dialogue: 1,{ass_time(rs)},{ass_time(re)},Remark,,0,0,0,,"
-                    f"{_ass_escape(r.get('text', ''))}"
-                )
+            try:
+                roff = max(0.0, float(r.get("offset", 0)))
+                rdur = max(0.8, float(r.get("duration", 2)))
+            except (TypeError, ValueError):
+                continue
+            text = str(r.get("text", "")).strip()
+            if text:
+                items.append((roff, rdur, text))
+        items.sort(key=lambda x: x[0])
+        last_end = -1.0
+        for roff, rdur, text in items:
+            if magazine and i == 0 and roff < 2.4:
+                continue
+            rs_rel = roff if last_end < 0 else max(roff, last_end + 0.15)
+            if rs_rel >= dur - 0.4:
+                continue
+            re_rel = min(dur, rs_rel + rdur)
+            if re_rel - rs_rel < 0.6:
+                continue
+            rs, re = offset + rs_rel, offset + re_rel
+            last_end = re_rel
+            body = _ass_escape(text)
+            if magazine:
+                body = "{\\fad(120,120)}" + body
+            lines.append(
+                f"Dialogue: 1,{ass_time(rs)},{ass_time(re)},Remark,,0,0,0,,{body}"
+            )
         offset += dur
 
+    if magazine and clips:
+        total = sum(float(c["end"]) - float(c["start"]) for c in clips)
+        lines.append(
+            f"Dialogue: 3,{ass_time(0)},{ass_time(total)},Badge,,0,0,0,,"
+            f"蜡笔小新 · 名场面"
+        )
+        if total > 3.2:
+            lines.append(
+                f"Dialogue: 3,{ass_time(total - 3.0)},{ass_time(total)},CTA,,0,0,0,,"
+                f"{{\\fad(200,0)}}关注看下集"
+            )
+        offset = 0.0
+        for i, clip in enumerate(clips):
+            s, e = float(clip["start"]), float(clip["end"])
+            dur = max(0.0, e - s)
+            title = str(clip.get("title") or f"第 {i + 1} 段").strip()
+            if i == 0:
+                hook_end = min(dur, 2.35)
+                if hook_end > 0.3 and title:
+                    lines.append(
+                        f"Dialogue: 2,{ass_time(0)},{ass_time(hook_end)},Hook,,0,0,0,,"
+                        f"{{\\fad(120,220)\\fscx112\\fscy112\\t(0,300,\\fscx100\\fscy100)}}"
+                        f"{_ass_escape(title)}"
+                    )
+                ts = hook_end
+            else:
+                ts = offset + 0.05
+            te = offset + dur
+            if te - ts >= 0.3 and title:
+                lines.append(
+                    f"Dialogue: 2,{ass_time(ts)},{ass_time(te)},Title,,0,0,0,,"
+                    f"{{\\fad(150,150)}}{i + 1:02d}/{len(clips):02d}  {_ass_escape(title)}"
+                )
+            offset += dur
+
     Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _even(n):
+    return max(2, int(round(float(n) / 2.0)) * 2)
+
+
+def detect_content_crop(path, samples=7):
+    """Detect baked-in pillarbox/letterbox. Returns (w, h, x, y)."""
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return None
+    try:
+        W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if not W or not H:
+            return None
+        dur = frames / fps if frames and fps else 0
+        xs, ys = [], []
+        for i in range(samples):
+            if dur:
+                cap.set(cv2.CAP_PROP_POS_MSEC, dur * (i + 0.5) / samples * 1000)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            cols = np.where(g.mean(axis=0) > 8)[0]
+            rows = np.where(g.mean(axis=1) > 8)[0]
+            if len(cols):
+                xs.append((int(cols.min()), int(cols.max())))
+            if len(rows):
+                ys.append((int(rows.min()), int(rows.max())))
+        if not xs or not ys:
+            return (W, H, 0, 0)
+        x0 = int(np.median([a for a, _ in xs]))
+        x1 = int(np.median([b for _, b in xs]))
+        y0 = int(np.median([a for a, _ in ys]))
+        y1 = int(np.median([b for _, b in ys]))
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        x0 -= x0 % 2
+        y0 -= y0 % 2
+        w -= w % 2
+        h -= h % 2
+        x0 = max(0, min(x0, W - 2))
+        y0 = max(0, min(y0, H - 2))
+        w = max(2, min(w, W - x0))
+        h = max(2, min(h, H - y0))
+        if w >= W * 0.97 and h >= H * 0.97:
+            return (W, H, 0, 0)
+        return (w, h, x0, y0)
+    finally:
+        cap.release()
+
+
+def build_vertical_fc(mode, cw, ch, cx, cy, idx=0):
+    """Vertical layout filter_complex for blur / magazine."""
+    aspect = cw / max(1, ch)
+    crop = f"crop={cw}:{ch}:{cx}:{cy}"
+    if mode == "blur":
+        fg_w = 1000
+        fg_h = _even(fg_w / aspect)
+        if fg_h > 900:
+            fg_h = 900
+            fg_w = _even(fg_h * aspect)
+        return (
+            f"[0:v]{crop},split=2[bg][fg];"
+            f"[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920,gblur=sigma=32,"
+            f"eq=brightness=-0.22:saturation=1.14,vignette=PI/6[bg2];"
+            f"[fg]scale={fg_w}:{fg_h}:flags=lanczos,"
+            f"unsharp=5:5:0.45:5:5:0.0,cas=0.30[fg2];"
+            f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p[v]"
+        )
+    if mode == "magazine":
+        punch = idx % 2 == 1
+        fg_w = 1040 if punch else 1000
+        fg_h = _even(fg_w / aspect)
+        if fg_h > 860:
+            fg_h = 860
+            fg_w = _even(fg_h * aspect)
+        y = 600 + max(0, (760 - fg_h) // 2)
+        x = (1080 - fg_w) // 2
+        sh_x = max(0, x - 8)
+        sh_y = max(0, y - 8)
+        sh_w = min(1080 - sh_x, fg_w + 16)
+        sh_h = fg_h + 16
+        flash = ",fade=t=in:st=0:d=0.06:color=white" if idx > 0 else ""
+        return (
+            f"[0:v]{crop},split=2[bg][fg];"
+            f"[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920,gblur=sigma=36,"
+            f"eq=brightness=-0.22:saturation=1.14,vignette=PI/6[bg2];"
+            f"[bg2]drawbox=x=0:y=0:w=1080:h=540:color=black@0.16:t=fill,"
+            f"drawbox=x=0:y=1500:w=1080:h=420:color=black@0.20:t=fill,"
+            f"drawbox=x={sh_x}:y={sh_y}:w={sh_w}:h={sh_h}:color=black@0.38:t=fill[bg3];"
+            f"[fg]scale={fg_w}:{fg_h}:flags=lanczos,"
+            f"unsharp=5:5:0.55:5:5:0.0,cas=0.32[fg2];"
+            f"[bg3][fg2]overlay={x}:{y}[base];"
+            f"[base]drawbox=x={x}:y={y}:w={fg_w}:h={fg_h}:color=white@0.22:t=4,"
+            f"drawbox=x=60:y=150:w=140:h=6:color=0xFFD54A@0.95:t=fill"
+            f"{flash},fps=30,format=yuv420p[v]"
+        )
+    return None
 
 
 def run_ai_edit(job, clips, options):
@@ -2063,31 +2245,46 @@ def run_ai_edit(job, clips, options):
         persist_history()
 
         video = Path(job["path"])
+        info = probe_video(video)
+        src_w, src_h = int(info.get("width") or 0), int(info.get("height") or 0)
+        if src_w <= 0 or src_h <= 0:
+            raise RuntimeError("无法读取视频分辨率")
+        cc = detect_content_crop(video) or (src_w, src_h, 0, 0)
+        cw, ch, cx, cy = cc
+        job["contentCrop"] = [cw, ch, cx, cy]
         out_dir = job["dir"] / "AI_Edit" / ("edit_" + now_str())
         out_dir.mkdir(parents=True, exist_ok=True)
         seg_paths = []
         n = len(clips)
         total = sum(float(c["end"]) - float(c["start"]) for c in clips)
+        mode = (options.get("verticalMode", "magazine") if options.get("vertical") else "")
+        if mode not in ("magazine", "blur", "crop", "pad"):
+            mode = "crop"
+        if mode in ("magazine", "blur"):
+            job["aiEditMessage"] = (
+                f"画面检测：{cw}×{ch}（已去黑边）· 开始剪辑…"
+                if (cw, ch) != (src_w, src_h) else "开始剪辑…"
+            )
+            persist_history()
 
         for i, clip in enumerate(clips):
             s, e = float(clip["start"]), float(clip["end"])
             seg = out_dir / f"seg_{i:03d}.mp4"
-            mode = options.get("verticalMode", "blur") if options.get("vertical") else ""
             base_cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(video)]
             tail = ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
                     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
                     "-movflags", "+faststart", str(seg)]
-            if mode == "blur":
-                fc = ("[0:v]split=2[bg][fg];"
-                      "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                      "crop=1080:1920,gblur=sigma=20[bg2];"
-                      "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
-                      "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p[v]")
+            if mode in ("magazine", "blur"):
+                fc = build_vertical_fc(mode, cw, ch, cx, cy, i)
                 cmd = base_cmd + ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"] + tail
             else:
                 vf = []
+                if (cw, ch, cx, cy) != (src_w, src_h, 0, 0):
+                    vf.append(f"crop={cw}:{ch}:{cx}:{cy}")
                 if mode == "crop":
-                    vf += ["scale=1080:1920:force_original_aspect_ratio=increase", "crop=1080:1920"]
+                    vf += ["scale=1080:1920:force_original_aspect_ratio=increase",
+                           "crop=1080:1920",
+                           "unsharp=5:5:0.45:5:5:0.0", "cas=0.25"]
                 elif mode == "pad":
                     vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
                            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"]
@@ -2115,16 +2312,26 @@ def run_ai_edit(job, clips, options):
             job["aiEditProgress"] = 85
             job["aiEditMessage"] = "生成最终成片…"
             cmd = ["ffmpeg", "-y", "-i", str(concat)]
+            vf_parts = []
+            if mode == "magazine":
+                vf_parts.append("drawbox=x=0:y=1898:w=1080:h=18:color=white@0.12:t=fill")
+                vf_parts.append(
+                    f"drawbox=x=0:y=1898:w='iw*t/{max(0.01, total):.3f}':h=18:"
+                    f"color=0xFFD54A@0.95:t=fill"
+                )
             if add_remarks:
                 cut_ass = out_dir / "cut.ass"
                 write_cut_ass(job, clips, cut_ass,
                               include_subtitles=options.get("burnSubtitles", True),
-                              vertical=options.get("vertical", False))
-                cmd += ["-vf", f"ass={cut_ass.name}"]
+                              vertical=options.get("vertical", False),
+                              layout=mode)
+                vf_parts.append(f"ass={cut_ass.name}")
             elif options.get("burnSubtitles"):
                 cut_srt = out_dir / "cut.srt"
                 write_cut_srt(job, clips, cut_srt)
-                cmd += ["-vf", f"subtitles={cut_srt.name}"]
+                vf_parts.append(f"subtitles={cut_srt.name}")
+            if vf_parts:
+                cmd += ["-vf", ",".join(vf_parts)]
             if options.get("normalizeAudio"):
                 cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
             cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
@@ -2551,7 +2758,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "请先生成剪辑方案"})
             options = {
                 "vertical": bool(data.get("vertical", False)),
-                "verticalMode": str(data.get("verticalMode", "pad")),
+                "verticalMode": str(data.get("verticalMode", "magazine")),
                 "burnSubtitles": bool(data.get("burnSubtitles", True)),
                 "normalizeAudio": bool(data.get("normalizeAudio", True)),
                 "addRemarks": bool(data.get("addRemarks", True)),
