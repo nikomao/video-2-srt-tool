@@ -56,7 +56,7 @@ SEVENZIP_URL = "https://www.7-zip.org/a/7zr.exe"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0" if "--lan" in sys.argv else "127.0.0.1"
 START_PORT = 8000
 END_PORT = 8020
 MAX_LOG = 600
@@ -1184,6 +1184,7 @@ def job_public(job):
         "aiEditProgress": job.get("aiEditProgress", 0),
         "aiEditMessage": job.get("aiEditMessage", ""),
         "aiEditPlan": job.get("aiEditPlan"),
+        "aiEditOutput": job.get("aiEditOutput"),
         "aiEditReady": bool(job.get("aiEditOutput") and Path(job["aiEditOutput"]).exists()),
         "aiEditError": job.get("aiEditError"),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
@@ -1897,11 +1898,15 @@ def ai_plan_clips(job, instruction, max_clips, clip_length):
 
     system = "你是资深短视频剪辑师，只输出 JSON，不要输出解释。"
     user = (
-        "下面是视频字幕（序号 / 开始秒 / 结束秒 / 文本）。请根据要求挑选最值得剪的片段。\n"
+        "下面是视频字幕（序号 / 开始秒 / 结束秒 / 文本）。请根据要求挑选最值得剪的片段，"
+        "并为每段写 2-4 条搞笑吐槽/花字。\n"
         f"要求：{instruction}\n"
         f"最多选 {max_clips} 段，每段大约 {clip_length} 秒（可在 0.5x-1.5x 之间浮动）。\n"
         "片段之间不要重叠，时间必须在字幕范围内。\n"
-        '返回 JSON：{"clips":[{"start":12.3,"end":25.6,"title":"简短中文标题","reason":"为什么选它"}]}\n'
+        "备注要求：offset 是从该片段开始算的秒数，duration 1.5-3 秒，"
+        "text 不超过 18 个汉字，短平快、有梗、不低俗，可带「！」或「…」。\n"
+        '返回 JSON：{"clips":[{"start":12.3,"end":25.6,"title":"简短中文标题",'
+        '"reason":"为什么选它","remarks":[{"offset":2.0,"duration":2.0,"text":"妈妈嘴硬现场"}]}]}\n'
         f"字幕：\n{transcript}"
     )
     raw = llm_chat(key, system, user, timeout=180)
@@ -1921,10 +1926,28 @@ def ai_plan_clips(job, instruction, max_clips, clip_length):
         e = min(duration, e)
         if e - s < 0.5:
             continue
+        remarks = []
+        for r in (x.get("remarks") or []):
+            try:
+                off = float(r.get("offset", 0))
+                dur = float(r.get("duration", 2))
+            except (TypeError, ValueError):
+                continue
+            text = str(r.get("text", "")).strip()
+            if not text:
+                continue
+            off = max(0.0, min(off, max(0.0, (e - s) - 0.5)))
+            dur = max(0.8, min(4.0, dur))
+            remarks.append({"offset": round(off, 2), "duration": round(dur, 2),
+                            "text": text[:40]})
+        if not remarks:
+            remarks = [{"offset": 0.3, "duration": 2.5,
+                        "text": (str(x.get("title", "")).strip() or "名场面")[:40]}]
         clips.append({
             "start": round(s, 2), "end": round(e, 2),
             "title": str(x.get("title", "")).strip() or "片段",
             "reason": str(x.get("reason", "")).strip(),
+            "remarks": remarks,
         })
     if not clips:
         raise RuntimeError("AI 没有返回有效片段，请换个要求重试")
@@ -1955,6 +1978,78 @@ def write_cut_srt(job, clips, out_path):
     Path(out_path).write_text(build_srt(out), encoding="utf-8")
 
 
+def ass_time(t):
+    t = max(0.0, t)
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h}:{m:02d}:{s:05.2f}"
+
+
+def _ass_escape(text):
+    return (str(text or "")
+            .replace("\\", "\\\\")
+            .replace("{", "\\{")
+            .replace("}", "\\}")
+            .replace("\n", "\\N"))
+
+
+def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False):
+    width, height = (1080, 1920) if vertical else (1920, 1080)
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Sub,Microsoft YaHei,46,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,40,40,56,1",
+        "Style: Remark,Microsoft YaHei,66,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,40,40,90,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+
+    if include_subtitles:
+        cues = parse_srt(read_text(Path(job.get("reviewed") or job.get("sub") or job.get("raw"))))
+        offset = 0.0
+        for clip in clips:
+            s, e = float(clip["start"]), float(clip["end"])
+            for cue in cues:
+                a, b = cue["time"].split("-->")
+                cs, ce = srt_time_to_seconds(a), srt_time_to_seconds(b)
+                if ce <= s or cs >= e:
+                    continue
+                ns = max(cs, s) - s + offset
+                ne = min(ce, e) - s + offset
+                if ne - ns < 0.05:
+                    continue
+                lines.append(
+                    f"Dialogue: 0,{ass_time(ns)},{ass_time(ne)},Sub,,0,0,0,,"
+                    f"{_ass_escape(cue['text'])}"
+                )
+            offset += e - s
+
+    offset = 0.0
+    for clip in clips:
+        s, e = float(clip["start"]), float(clip["end"])
+        dur = e - s
+        for r in (clip.get("remarks") or []):
+            rs = offset + max(0.0, float(r.get("offset", 0)))
+            re = min(offset + dur, rs + max(0.8, float(r.get("duration", 2))))
+            if re > rs:
+                lines.append(
+                    f"Dialogue: 1,{ass_time(rs)},{ass_time(re)},Remark,,0,0,0,,"
+                    f"{_ass_escape(r.get('text', ''))}"
+                )
+        offset += dur
+
+    Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run_ai_edit(job, clips, options):
     try:
         if not job.get("path") or not Path(job["path"]).exists():
@@ -1977,15 +2072,27 @@ def run_ai_edit(job, clips, options):
         for i, clip in enumerate(clips):
             s, e = float(clip["start"]), float(clip["end"])
             seg = out_dir / f"seg_{i:03d}.mp4"
-            vf = []
-            if options.get("vertical"):
-                vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
-                       "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"]
-            vf += ["fps=30", "format=yuv420p"]
-            cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(video),
-                   "-vf", ",".join(vf), "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-                   "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-                   "-movflags", "+faststart", str(seg)]
+            mode = options.get("verticalMode", "blur") if options.get("vertical") else ""
+            base_cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(video)]
+            tail = ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                    "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                    "-movflags", "+faststart", str(seg)]
+            if mode == "blur":
+                fc = ("[0:v]split=2[bg][fg];"
+                      "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                      "crop=1080:1920,gblur=sigma=20[bg2];"
+                      "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
+                      "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p[v]")
+                cmd = base_cmd + ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"] + tail
+            else:
+                vf = []
+                if mode == "crop":
+                    vf += ["scale=1080:1920:force_original_aspect_ratio=increase", "crop=1080:1920"]
+                elif mode == "pad":
+                    vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
+                           "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"]
+                vf += ["fps=30", "format=yuv420p"]
+                cmd = base_cmd + ["-vf", ",".join(vf)] + tail
             run_ffmpeg_progress(job, cmd, e - s, f"剪辑片段 {i + 1}/{n}")
             seg_paths.append(seg)
             job["aiEditProgress"] = int((i + 1) / n * 80)
@@ -2002,12 +2109,19 @@ def run_ai_edit(job, clips, options):
             total, "拼接中", cwd=str(out_dir),
         )
 
+        add_remarks = options.get("addRemarks", True)
         final = concat
-        if options.get("burnSubtitles") or options.get("normalizeAudio"):
+        if options.get("burnSubtitles") or options.get("normalizeAudio") or add_remarks:
             job["aiEditProgress"] = 85
             job["aiEditMessage"] = "生成最终成片…"
             cmd = ["ffmpeg", "-y", "-i", str(concat)]
-            if options.get("burnSubtitles"):
+            if add_remarks:
+                cut_ass = out_dir / "cut.ass"
+                write_cut_ass(job, clips, cut_ass,
+                              include_subtitles=options.get("burnSubtitles", True),
+                              vertical=options.get("vertical", False))
+                cmd += ["-vf", f"ass={cut_ass.name}"]
+            elif options.get("burnSubtitles"):
                 cut_srt = out_dir / "cut.srt"
                 write_cut_srt(job, clips, cut_srt)
                 cmd += ["-vf", f"subtitles={cut_srt.name}"]
@@ -2437,8 +2551,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "请先生成剪辑方案"})
             options = {
                 "vertical": bool(data.get("vertical", False)),
+                "verticalMode": str(data.get("verticalMode", "pad")),
                 "burnSubtitles": bool(data.get("burnSubtitles", True)),
                 "normalizeAudio": bool(data.get("normalizeAudio", True)),
+                "addRemarks": bool(data.get("addRemarks", True)),
             }
             ok = start_ai_edit(job, clips, options)
             return self.send_json(200, {"ok": ok})
@@ -2541,6 +2657,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------- 启动
+def lan_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
 def pick_port():
     for port in range(START_PORT, END_PORT + 1):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -2581,14 +2708,16 @@ def main():
     port = pick_port()
     server = ThreadingHTTPServer((HOST, port), Handler)
     server.daemon_threads = True
-    url = f"http://{HOST}:{port}/"
+    local_url = f"http://127.0.0.1:{port}/"
     print("=" * 60)
     print("  视频字幕生成器已启动")
-    print(f"  打开: {url}")
+    print(f"  电脑: {local_url}")
+    if HOST == "0.0.0.0":
+        print(f"  手机（同一 Wi-Fi）: http://{lan_ip()}:{port}/")
     print("  关闭此窗口即停止服务")
     print("=" * 60, flush=True)
     if "--no-browser" not in sys.argv:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        threading.Timer(1.0, lambda: webbrowser.open(local_url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

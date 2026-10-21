@@ -143,6 +143,29 @@
   .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-left:6px}
   footer{margin-top:28px;color:#566178;font-size:12px;text-align:center;line-height:1.7}
   .hidden{display:none!important}
+  @media (max-width: 640px){
+    .wrap{padding:16px 12px 50px}
+    h1{font-size:20px}
+    .hero{padding:20px 14px}
+    .hero h1{font-size:22px}
+    .quick label{flex:1 1 100%}
+    .quick select{width:100%}
+    .field{flex-direction:column}
+    .field input,.field select,.field button{width:100%}
+    .seg{width:100%}
+    .seg button{flex:1;padding:9px 6px;font-size:12px}
+    .stp{flex:1 1 28%;min-width:0;padding:6px 3px}
+    .stp .t{font-size:10.5px}
+    .grid{grid-template-columns:repeat(auto-fill,minmax(108px,1fr))}
+    .specgrid{grid-template-columns:1fr 1fr}
+    .pub{grid-template-columns:1fr}
+    .card{padding:13px 14px}
+    .card-head{flex-direction:column;align-items:flex-start}
+    .pill{align-self:flex-start}
+    .row button{flex:1 1 auto}
+    .modal-box{padding:16px}
+    .top-actions{width:100%;justify-content:flex-end}
+  }
 </style>
 </head>
 <body>
@@ -406,7 +429,12 @@
         </div>
         <div id="aiPlanList" class="list" style="margin-top:12px"></div>
         <div class="row" style="margin-top:12px">
-          <label class="chk"><input type="checkbox" id="aiVertical"> 竖屏 9:16</label>
+          <label class="chk"><input type="checkbox" id="aiVertical" checked> 竖屏 9:16</label>
+          <select id="aiVerticalMode" style="background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:6px 8px;font:inherit;font-size:12px">
+            <option value="pad">加黑边（保留全画面）</option>
+            <option value="crop">裁切填满（适合手机）</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="aiRemarks" checked> 加搞笑备注/花字</label>
           <label class="chk"><input type="checkbox" id="aiBurn" checked> 烧字幕</label>
           <label class="chk"><input type="checkbox" id="aiNorm" checked> 响度标准化</label>
           <button class="primary" id="aiRenderBtn">生成成片</button>
@@ -1375,7 +1403,8 @@ function renderAiPlan(clips){
         <input data-end="${i}" value="${c.end}" style="width:78px;background:#0a0e17;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font:inherit" />
         <b style="font-size:13px">${esc(c.title||'片段')}</b>
       </div>
-      <div class="meta" style="margin-top:6px">${esc(c.reason||'')}</div>`;
+      <div class="meta" style="margin-top:6px">${esc(c.reason||'')}</div>
+      ${c.remarks && c.remarks.length ? `<div class="meta" style="margin-top:6px;color:#f5d78a">花字：${c.remarks.map(r=>esc(r.text)).join(' · ')}</div>` : ''}`;
     el.appendChild(card);
   });
 }
@@ -1421,7 +1450,9 @@ async function aiRender(){
     $('#aiActions').innerHTML='';
     await api('/api/ai-edit/render',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({jobId:aiJob,clips,vertical:$('#aiVertical').checked,
-        burnSubtitles:$('#aiBurn').checked,normalizeAudio:$('#aiNorm').checked})});
+        verticalMode:$('#aiVerticalMode').value,
+        burnSubtitles:$('#aiBurn').checked,normalizeAudio:$('#aiNorm').checked,
+        addRemarks:$('#aiRemarks').checked})});
     pollAiJob();
   }catch(e){
     $('#aiRenderBtn').disabled=false;
