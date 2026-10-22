@@ -451,13 +451,19 @@
         <div class="msg" id="aiRenderMsg"></div>
         <div class="bar" id="aiBar"><i></i></div>
         <div class="row" id="aiActions"></div>
-        <div id="aiLibrary" style="display:none;margin-top:18px">
+      </div>
+      <div id="aiLibrary" style="display:none;margin-top:18px">
+        <div class="box">
           <div class="row" style="margin-top:0;align-items:center">
-            <b style="font-size:13px">🎬 成片库</b>
-            <button class="ghost small" id="aiLibRefresh">刷新</button>
+            <b style="font-size:15px">🎬 成片库 <span id="aiLibCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></b>
+            <button class="ghost small" id="aiLibRefresh" style="margin-left:auto">刷新</button>
           </div>
-          <video id="aiLibVideo" controls playsinline preload="metadata" style="width:100%;max-width:420px;aspect-ratio:9/16;background:#000;border-radius:12px;margin-top:10px;display:none"></video>
-          <div id="aiLibList" class="list" style="margin-top:10px"></div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:10px">
+            <div style="flex:0 0 300px;max-width:100%">
+              <video id="aiLibVideo" controls playsinline preload="metadata" style="width:100%;aspect-ratio:9/16;background:#000;border-radius:12px;display:none"></video>
+            </div>
+            <div id="aiLibList" class="list" style="flex:1 1 420px;min-width:260px;max-height:72vh;overflow:auto"></div>
+          </div>
         </div>
       </div>
       <div class="nav">
@@ -1346,6 +1352,7 @@ async function loadAiLibrary(){
     const items=r.renders||[];
     if(!items.length){ box.style.display='none'; return; }
     box.style.display='block';
+    const cnt=$('#aiLibCount'); if(cnt) cnt.textContent='共 '+items.length+' 个成片';
     list.innerHTML='';
     const v=$('#aiLibVideo');
     if(v && !v.getAttribute('src') && items.length){
@@ -1586,6 +1593,11 @@ document.addEventListener('click',e=>{
   if(b){ e.preventDefault(); go(+b.dataset.goto); }
 });
 go(0);
+if(new URLSearchParams(location.search).has('library')){
+  go(9);
+  loadAiLibrary();
+  setTimeout(()=>{ const el=$('#aiLibrary'); if(el) el.scrollIntoView({behavior:'auto',block:'start'}); }, 600);
+}
 </script>
 </body>
 </html>
