@@ -1187,6 +1187,7 @@ def job_public(job):
         "aiEditOutput": job.get("aiEditOutput"),
         "aiEditReady": bool(job.get("aiEditOutput") and Path(job["aiEditOutput"]).exists()),
         "aiEditError": job.get("aiEditError"),
+        "zhSubtitle": job.get("zhSubtitle"),
         "elapsed": int(time.time() - job["started"]) if job.get("started") else 0,
     }
 
@@ -1214,6 +1215,7 @@ def _job_to_record(job):
         "aiEditPlan": job.get("aiEditPlan"),
         "aiEditOutput": job.get("aiEditOutput"),
         "aiEditError": job.get("aiEditError"),
+        "zhSubtitle": job.get("zhSubtitle"),
         "dir": str(job["dir"]),
     }
 
@@ -1326,6 +1328,7 @@ def load_history():
             "aiEditPlan": r.get("aiEditPlan"),
             "aiEditOutput": r.get("aiEditOutput"),
             "aiEditError": r.get("aiEditError"),
+            "zhSubtitle": r.get("zhSubtitle"),
             "detectedLang": r.get("detectedLang"),
             "dir": Path(r["dir"]) if r.get("dir") else (WORK_DIR / jid),
             "created": r.get("created") or time.time(), "started": r.get("started"),
@@ -1955,7 +1958,8 @@ def ai_plan_clips(job, instruction, max_clips, clip_length):
 
 
 def write_cut_srt(job, clips, out_path):
-    cues = parse_srt(read_text(Path(job.get("reviewed") or job.get("sub") or job.get("raw"))))
+    src = job.get("editSubtitle") or job.get("reviewed") or job.get("sub") or job.get("raw")
+    cues = parse_srt(read_text(Path(src)))
     out = []
     offset = 0.0
     idx = 1
@@ -2028,7 +2032,8 @@ def write_cut_ass(job, clips, out_path, include_subtitles=True, vertical=False, 
     ]
 
     if include_subtitles:
-        src = job.get("reviewed") or job.get("sub") or job.get("raw")
+        src = (job.get("editSubtitle") or job.get("reviewed")
+               or job.get("sub") or job.get("raw"))
         cues = parse_srt(read_text(Path(src))) if src else []
         offset = 0.0
         for clip in clips:
@@ -2282,7 +2287,20 @@ def run_ai_edit(job, clips, options):
             raise RuntimeError("无法读取视频分辨率")
         cc = detect_content_crop(video) or (src_w, src_h, 0, 0)
         cw, ch, cx, cy = cc
-        job["contentCrop"] = [cw, ch, cx, cy]
+
+        edit_sub = str(options.get("subtitlePath") or "").strip()
+        if edit_sub:
+            sp = Path(edit_sub)
+            if not sp.exists():
+                raise RuntimeError("指定的字幕文件不存在")
+            job["editSubtitle"] = str(sp)
+        else:
+            job.pop("editSubtitle", None)
+
+        crop_bottom = int(options.get("cropBottom") or 0)
+        crop_bottom = max(0, min(crop_bottom, max(0, ch - 100)))
+        ch_eff = max(100, ch - crop_bottom)
+        job["contentCrop"] = [cw, ch_eff, cx, cy]
         out_dir = job["dir"] / "AI_Edit" / ("edit_" + now_str())
         out_dir.mkdir(parents=True, exist_ok=True)
         seg_paths = []
@@ -2292,10 +2310,13 @@ def run_ai_edit(job, clips, options):
         if mode not in ("magazine", "blur", "crop", "pad"):
             mode = "crop"
         if mode in ("magazine", "blur"):
-            job["aiEditMessage"] = (
-                f"画面检测：{cw}×{ch}（已去黑边）· 开始剪辑…"
-                if (cw, ch) != (src_w, src_h) else "开始剪辑…"
-            )
+            notes = []
+            if (cw, ch) != (src_w, src_h):
+                notes.append("已去黑边")
+            if crop_bottom:
+                notes.append(f"已去硬字幕 {crop_bottom}px")
+            suffix = f"（{' / '.join(notes)}）" if notes else ""
+            job["aiEditMessage"] = f"画面检测：{cw}×{ch_eff}{suffix} · 开始剪辑…"
             persist_history()
 
         for i, clip in enumerate(clips):
@@ -2306,12 +2327,12 @@ def run_ai_edit(job, clips, options):
                     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
                     "-movflags", "+faststart", str(seg)]
             if mode in ("magazine", "blur"):
-                fc = build_vertical_fc(mode, cw, ch, cx, cy, i)
+                fc = build_vertical_fc(mode, cw, ch_eff, cx, cy, i)
                 cmd = base_cmd + ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"] + tail
             else:
                 vf = []
-                if (cw, ch, cx, cy) != (src_w, src_h, 0, 0):
-                    vf.append(f"crop={cw}:{ch}:{cx}:{cy}")
+                if (cw, ch_eff, cx, cy) != (src_w, src_h, 0, 0):
+                    vf.append(f"crop={cw}:{ch_eff}:{cx}:{cy}")
                 if mode == "crop":
                     vf += ["scale=1080:1920:force_original_aspect_ratio=increase",
                            "crop=1080:1920",
@@ -2394,6 +2415,18 @@ def start_ai_edit(job, clips, options):
     return True
 
 
+def ai_render_path(job, render_id=""):
+    if not job:
+        return None
+    if render_id:
+        if not re.fullmatch(r"edit_\d{8}_\d{6}", str(render_id)):
+            return None
+        p = job["dir"] / "AI_Edit" / str(render_id) / "final.mp4"
+        return p if p.exists() else None
+    out = job.get("aiEditOutput")
+    return Path(out) if out and Path(out).exists() else None
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "SubtitleApp/2.0"
@@ -2438,6 +2471,82 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
 
+    def send_file_stream(self, path: Path, download_name: str = ""):
+        """Serve a video inline with HTTP Range support (for <video>)."""
+        if not path.exists():
+            return self.send_json(404, {"error": "文件不存在"})
+        size = path.stat().st_size
+        range_header = (self.headers.get("Range") or "").strip()
+        start, end = 0, size - 1
+        status = 200
+        if range_header:
+            m = re.match(r"bytes=(\d*)-(\d*)", range_header)
+            if m:
+                a, b = m.group(1), m.group(2)
+                if a:
+                    start = int(a)
+                    if b:
+                        end = min(int(b), size - 1)
+                elif b:
+                    n = int(b)
+                    start = max(0, size - n)
+                    end = size - 1
+                if start >= size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                status = 206
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-store")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if download_name:
+            self.send_header(
+                "Content-Disposition",
+                "inline; filename*=UTF-8''" + urllib.parse.quote(download_name),
+            )
+        self.end_headers()
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(256 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_HEAD(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/ai-edit/stream":
+            qs = urllib.parse.parse_qs(parsed.query)
+            job = JOBS.get((qs.get("job") or [""])[0])
+            out = ai_render_path(job, (qs.get("render") or [""])[0])
+            if not out:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            size = out.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            return
+        self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     # ------------------------- GET
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -2477,13 +2586,63 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(404, {"error": "优化视频尚未生成"})
             out = Path(job["output"])
             return self.send_file_download(out, out.name)
+        if path == "/api/ai-edit/stream":
+            job = JOBS.get((qs.get("job") or [""])[0])
+            render_id = (qs.get("render") or [""])[0]
+            out = ai_render_path(job, render_id)
+            if not out:
+                return self.send_json(404, {"error": "成片尚未生成"})
+            return self.send_file_stream(out, out.name)
+
+        if path == "/api/ai-edit/renders":
+            job_id = (qs.get("job") or [""])[0]
+            jobs = [JOBS.get(job_id)] if job_id else list(JOBS.values())
+            items = []
+            for job in jobs:
+                if not job:
+                    continue
+                base = job["dir"] / "AI_Edit"
+                if not base.exists():
+                    continue
+                for d in base.glob("edit_*"):
+                    f = d / "final.mp4"
+                    if not f.exists():
+                        continue
+                    st = f.stat()
+                    if st.st_size < 3 * 1024 * 1024:
+                        continue
+                    meta = {}
+                    mp = d / "meta.json"
+                    if mp.exists():
+                        try:
+                            meta = json.loads(mp.read_text(encoding="utf-8"))
+                        except Exception:
+                            meta = {}
+                    items.append({
+                        "jobId": job["id"],
+                        "name": job.get("name") or job["id"],
+                        "render": d.name,
+                        "time": time.strftime("%m-%d %H:%M", time.localtime(st.st_mtime)),
+                        "size": st.st_size,
+                        "latest": str(f) == str(job.get("aiEditOutput") or ""),
+                        "label": meta.get("label", ""),
+                        "duration": meta.get("duration"),
+                        "_mtime": st.st_mtime,
+                    })
+            items.sort(key=lambda x: x["_mtime"], reverse=True)
+            for it in items:
+                it.pop("_mtime", None)
+            return self.send_json(200, {"renders": items[:100]})
+
         if path == "/api/ai-edit/download":
             job = JOBS.get((qs.get("job") or [""])[0])
-            if not job or not job.get("aiEditOutput") or not Path(job["aiEditOutput"]).exists():
+            render_id = (qs.get("render") or [""])[0]
+            out = ai_render_path(job, render_id)
+            if not out:
                 return self.send_json(404, {"error": "成片尚未生成"})
-            out = Path(job["aiEditOutput"])
             base = os.path.splitext(job["name"])[0]
-            return self.send_file_download(out, base + "_ai_edit.mp4")
+            suffix = f"_{render_id}" if render_id else "_ai_edit"
+            return self.send_file_download(out, base + suffix + ".mp4")
         if path == "/api/video/open":
             job = VIDEO_JOBS.get((qs.get("job") or [""])[0])
             if not job:
@@ -2780,6 +2939,33 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 return self.send_json(500, {"error": str(e)})
 
+        if path == "/api/ai-edit/zh-sub":
+            job = JOBS.get(data.get("jobId", ""))
+            if not job:
+                return self.send_json(404, {"error": "任务不存在"})
+            if job.get("aiEditState") == "running":
+                return self.send_json(400, {"error": "正在剪辑，请稍后再试"})
+            cached = job.get("zhSubtitle")
+            if cached and Path(cached).exists() and not data.get("force"):
+                return self.send_json(200, {"ok": True, "path": cached, "cached": True})
+            src = job.get("reviewed") or job.get("sub") or job.get("raw")
+            if not src or not Path(src).exists():
+                return self.send_json(400, {"error": "字幕尚未生成"})
+            key = get_deepseek_key()
+            if not key:
+                return self.send_json(400, {"error": "请先配置 DeepSeek API Key"})
+            try:
+                cues = parse_srt(read_text(Path(src)))
+                dummy = {"progress": 0, "message": ""}
+                out_cues = llm_translate(dummy, cues, "简体中文", key)
+                out = job["dir"] / "zh_edit.srt"
+                out.write_text(build_srt(out_cues), encoding="utf-8")
+                job["zhSubtitle"] = str(out)
+                persist_history()
+                return self.send_json(200, {"ok": True, "path": str(out), "count": len(cues)})
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(500, {"error": "翻译失败：" + str(e)})
+
         if path == "/api/ai-edit/render":
             job = JOBS.get(data.get("jobId", ""))
             if not job:
@@ -2793,6 +2979,8 @@ class Handler(BaseHTTPRequestHandler):
                 "burnSubtitles": bool(data.get("burnSubtitles", True)),
                 "normalizeAudio": bool(data.get("normalizeAudio", True)),
                 "addRemarks": bool(data.get("addRemarks", True)),
+                "subtitlePath": str(data.get("subtitlePath", "")),
+                "cropBottom": int(data.get("cropBottom", 0) or 0),
             }
             ok = start_ai_edit(job, clips, options)
             return self.send_json(200, {"ok": ok})

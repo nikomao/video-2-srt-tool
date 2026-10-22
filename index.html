@@ -176,6 +176,7 @@
       <div class="sub">拖入视频即可开始 · 首页 / 历史记录 / 平台文案</div>
     </div>
     <div class="top-actions">
+      <button class="ghost small" id="libraryBtn">🎬 成片库</button>
       <button class="ghost small" id="historyBtn">📚 历史记录 <span id="histCount"></span></button>
       <button class="ghost small" id="cleanupBtn">清理已完成</button>
     </div>
@@ -442,9 +443,22 @@
           <label class="chk"><input type="checkbox" id="aiNorm" checked> 响度标准化</label>
           <button class="primary" id="aiRenderBtn">生成成片</button>
         </div>
+        <div class="field" style="margin-top:8px">
+          <label class="chk"><input type="checkbox" id="aiZhSubs" checked> 简体中文字幕（自动翻译）</label>
+          <label class="chk"><input type="checkbox" id="aiStripSubs"> 去除原片硬字幕</label>
+          <label class="chk">底部裁掉 <input id="aiCropBottom" type="number" value="120" style="width:64px;margin-left:6px" /> px <span style="color:var(--muted);font-size:11px">(720p 建议 120 / 480p 100)</span></label>
+        </div>
         <div class="msg" id="aiRenderMsg"></div>
         <div class="bar" id="aiBar"><i></i></div>
         <div class="row" id="aiActions"></div>
+        <div id="aiLibrary" style="display:none;margin-top:18px">
+          <div class="row" style="margin-top:0;align-items:center">
+            <b style="font-size:13px">🎬 成片库</b>
+            <button class="ghost small" id="aiLibRefresh">刷新</button>
+          </div>
+          <video id="aiLibVideo" controls playsinline preload="metadata" style="width:100%;max-width:420px;aspect-ratio:9/16;background:#000;border-radius:12px;margin-top:10px;display:none"></video>
+          <div id="aiLibList" class="list" style="margin-top:10px"></div>
+        </div>
       </div>
       <div class="nav">
         <button class="ghost" data-goto="0">回首页</button>
@@ -1135,6 +1149,11 @@ $('#adjustSubmit').onclick=async()=>{
   }
 };
 $('#historyBtn').onclick=()=>go(7);
+$('#libraryBtn').onclick=()=>{
+  go(9);
+  loadAiLibrary();
+  setTimeout(()=>{ const el=$('#aiLibrary'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); }, 300);
+};
 $('#openHistoryBtn').onclick=()=>go(7);
 $('#refreshHistoryBtn').onclick=loadHistory;
 $('#clearHistoryBtn').onclick=async()=>{
@@ -1292,7 +1311,7 @@ async function pollVideo(){
 }
 
 /* ---------------- 9 AI 剪辑 ---------------- */
-let aiJob = null, aiTimer = null;
+let aiJob = null, aiTimer = null, aiPlanCache = [], aiZhSubPath = null;
 
 function initAiPanel(){
   const drop=$('#aiDrop'), input=$('#aiInput');
@@ -1310,6 +1329,57 @@ function initAiPanel(){
     aiPlan();
   };
   $('#aiRenderBtn').onclick=aiRender;
+  $('#aiLibRefresh').onclick=loadAiLibrary;
+  loadAiLibrary();
+}
+
+function fmtDur(sec){
+  sec=Math.max(0,Math.round(sec||0));
+  return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');
+}
+
+async function loadAiLibrary(){
+  const box=$('#aiLibrary'), list=$('#aiLibList');
+  if(!box||!list) return;
+  try{
+    const r=await api('/api/ai-edit/renders');
+    const items=r.renders||[];
+    if(!items.length){ box.style.display='none'; return; }
+    box.style.display='block';
+    list.innerHTML='';
+    const v=$('#aiLibVideo');
+    if(v && !v.getAttribute('src') && items.length){
+      const it=items[0];
+      v.src='/api/ai-edit/stream?job='+encodeURIComponent(it.jobId)+'&render='+encodeURIComponent(it.render)+'&t='+Date.now();
+      v.style.display='block';
+    }
+    items.forEach(it=>{
+      const card=document.createElement('div');
+      card.className='card'; card.style.padding='10px 12px';
+      const size=(it.size/1048576).toFixed(1)+' MB';
+      const title=it.label || it.name || it.jobId;
+      const dur=it.duration ? ' · '+fmtDur(it.duration) : '';
+      card.innerHTML=`
+        <div class="row" style="margin-top:0;align-items:center">
+          <b style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</b>
+          ${it.latest?'<span style="color:#9af0cd;font-size:11px">最新</span>':''}
+        </div>
+        ${it.label?`<div class="meta" style="margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name||it.jobId)}</div>`:''}
+        <div class="meta" style="margin-top:4px">${esc(it.time||'')} · ${size}${dur}</div>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost small ai-play">▶ 播放</button>
+          <a class="ghost small" style="text-decoration:none" href="/api/ai-edit/download?job=${encodeURIComponent(it.jobId)}&render=${encodeURIComponent(it.render)}">⬇ 下载</a>
+        </div>`;
+      card.querySelector('.ai-play').onclick=()=>{
+        const v=$('#aiLibVideo');
+        v.src='/api/ai-edit/stream?job='+encodeURIComponent(it.jobId)+'&render='+encodeURIComponent(it.render)+'&t='+Date.now();
+        v.style.display='block';
+        v.scrollIntoView({behavior:'smooth',block:'center'});
+        v.play().catch(()=>{});
+      };
+      list.appendChild(card);
+    });
+  }catch(e){ box.style.display='none'; }
 }
 
 function aiStatusHtml(msg, pct, state){
@@ -1319,7 +1389,7 @@ function aiStatusHtml(msg, pct, state){
 }
 
 function startAiFlow(file){
-  aiJob=null;
+  aiJob=null; aiPlanCache=[]; aiZhSubPath=null;
   if(aiTimer){ clearTimeout(aiTimer); aiTimer=null; }
   $('#aiPlanBox').style.display='none';
   $('#aiPlanList').innerHTML='';
@@ -1385,6 +1455,15 @@ async function pollAiJob(){
         a.textContent='⬇ 下载 AI 剪辑成片';
         $('#aiActions').appendChild(a);
       }
+      if(s.aiEditReady){
+        const v=$('#aiLibVideo');
+        if(v){
+          v.src='/api/ai-edit/stream?job='+encodeURIComponent(aiJob)+'&t='+Date.now();
+          v.style.display='block';
+          v.scrollIntoView({behavior:'smooth',block:'center'});
+        }
+        loadAiLibrary();
+      }
       return;
     }
     if(s.aiEditState==='error'){
@@ -1401,6 +1480,7 @@ async function pollAiJob(){
 }
 
 function renderAiPlan(clips){
+  aiPlanCache = clips || [];
   const el=$('#aiPlanList'); el.innerHTML='';
   (clips||[]).forEach((c,i)=>{
     const card=document.createElement('div'); card.className='card'; card.style.padding='11px 13px';
@@ -1443,13 +1523,14 @@ async function aiRender(){
   if(!aiJob){ alert('请先上传视频'); return; }
   const cards=[...document.querySelectorAll('#aiPlanList .card')];
   const clips=[];
-  cards.forEach(card=>{
+  cards.forEach((card,idx)=>{
     const use=card.querySelector('.ai-use');
     if(!use||!use.checked) return;
     const start=parseFloat(card.querySelector('[data-start]').value);
     const end=parseFloat(card.querySelector('[data-end]').value);
     if(isNaN(start)||isNaN(end)||end<=start) return;
-    clips.push({start,end,title:card.querySelector('b').textContent,reason:''});
+    const orig=aiPlanCache[idx]||{};
+    clips.push({...orig,start,end,title:card.querySelector('b').textContent,reason:orig.reason||''});
   });
   if(!clips.length){ alert('至少勾选一段有效片段（结束时间要大于开始时间）'); return; }
   try{
@@ -1457,11 +1538,21 @@ async function aiRender(){
     $('#aiRenderMsg').textContent='开始剪辑…';
     $('#aiBar').className='bar running'; $('#aiBar>i').style.width='3%';
     $('#aiActions').innerHTML='';
+    let zhPath = $('#aiZhSubs').checked ? aiZhSubPath : '';
+    if($('#aiZhSubs').checked && !zhPath){
+      $('#aiRenderMsg').textContent='正在生成简体中文字幕…';
+      const z=await api('/api/ai-edit/zh-sub',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({jobId:aiJob})});
+      zhPath=z.path||''; aiZhSubPath=zhPath;
+      $('#aiRenderMsg').textContent='开始剪辑…';
+    }
+    const cropBottom = $('#aiStripSubs').checked
+      ? Math.max(0, parseInt($('#aiCropBottom').value)||0) : 0;
     await api('/api/ai-edit/render',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({jobId:aiJob,clips,vertical:$('#aiVertical').checked,
         verticalMode:$('#aiVerticalMode').value,
         burnSubtitles:$('#aiBurn').checked,normalizeAudio:$('#aiNorm').checked,
-        addRemarks:$('#aiRemarks').checked})});
+        addRemarks:$('#aiRemarks').checked,subtitlePath:zhPath||'',cropBottom})});
     pollAiJob();
   }catch(e){
     $('#aiRenderBtn').disabled=false;
